@@ -83,6 +83,12 @@ pub struct Snapshot {
     pub jupiter_key_configured: bool,
     pub live_enabled: bool,
     #[serde(default)]
+    pub real: Option<crate::live::RealAccount>,
+    #[serde(default)]
+    pub thb_rate: Option<crate::live::ThbRate>,
+    #[serde(default)]
+    pub real_balances: Option<crate::chain::Balances>,
+    #[serde(default)]
     pub updating: bool,
 }
 impl Snapshot {
@@ -119,6 +125,9 @@ impl Snapshot {
             email_configured: false,
             jupiter_key_configured: false,
             live_enabled: false,
+            real: None,
+            thb_rate: None,
+            real_balances: None,
             updating: false,
         })
     }

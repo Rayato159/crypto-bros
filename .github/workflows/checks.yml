@@ -15,6 +15,12 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:wallet
       - run: cargo fmt --all -- --check
       - run: cargo test --locked
       - run: cargo check -p crypto-bros-ui --target wasm32-unknown-unknown --locked

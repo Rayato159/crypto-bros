@@ -35,3 +35,21 @@ Published [v0.1.0 Research Preview](https://github.com/Rayato159/crypto-bros/rel
 All three public assets were downloaded without authentication and matched local sizes and SHA-256 values. The published checksum manifest also verified both named files. GitHub normalizes spaces in asset names, so the manifest uses `Crypto.Bros_0.1.0_x64-setup.exe` (5,990,381 bytes; SHA-256 `d598e5e8577441f9ffa6712b081e3fb22e90594e3d7b997115182632c0445ba7`). The other assets are `VERIFICATION.txt` and `SHA256SUMS.txt`.
 
 An anonymous inspection of the 92-file release source tree confirmed the excluded Windows helpers were absent. The release remains paper-only and unsigned; there is no configured in-app update channel. This documentation entry does not change the tagged source or installer.
+
+## 2026-10-31 — v0.2.0 manually approved trading and THB cost basis
+
+Added a separate integer real-money ledger, proportional historical THB funding allocation, USDC/THB reference valuation, native-SOL fee accounting, partial layer sales, parked profits and independently selected live advice models. Historical THB performance is separate from bot performance since onboarding. Personal funding amounts and addresses are not included in source or installers. Paper funds cannot flow into the real ledger.
+
+Implemented Jupiter Metis exact-input order preparation, bounded legacy/v0 transaction parsing, associated-account and instruction restrictions, simulation, separate gas-reserve checks, and an expiring localhost Phantom approval page with a locally bundled SDK. The worker verifies the exact signed message and wallet signature, commits the pending signature before submission, and books only finalized RPC balance changes. Unknown submissions remain pending; old missing history requires a history-capable RPC. Updates refuse unresolved signed orders. Restarts preserve pending work and pause new entries. No unattended signing or raw wallet-key custody is implemented.
+
+Live advice includes existing RSI/MACD ridge-model features and executable cost checks. Manual test orders bypass the signal only. Hard budget, layer, reserve, fee, quote-deviation and loss limits remain enforced. Live risk reviews queue the optional email path but never simulate a guaranteed stop-loss sale. Feedback is retained; no Q-learning or automatic policy promotion is claimed.
+
+Changed desktop packaging to MSI through Tauri/WiX. Added visible startup failures, graceful old-worker quiescence/backup during version replacement, and per-version database backups. The updater remains unconfigured and Windows artifacts remain unsigned. No real wallet was signed for, no funds moved, and no email was sent during development. Synthetic packet/account tests and mocked browser approval tests are distinct from actual Phantom/mainnet verification. Final build, artifact and publication results are recorded below when completed.
+
+### v0.2.0 packaged verification
+
+All 32 Rust tests and 3 bundled browser-wallet tests passed. The separate read-only public checks passed for Binance SOL/USDC candles, Jupiter quotes, Coinbase USDC/THB and Solana mainnet identity. The public RPC check caught an incorrect mainnet genesis constant; the final binary contains the verified value. Rust formatting, the WASM check and the MSI build passed; npm reported no known dependency vulnerabilities at verification time.
+
+Administrative extraction of the final MSI succeeded. Its worker is byte-identical to the release build; its desktop differs only by Tauri's expected `UNK` to `MSI` bundle marker. The package contains the two intended executables, without personal data or configuration. The final unsigned Windows x64 MSI is 9,502,720 bytes, SHA-256 `2f5667f8fac3758b55428257080f08e97088d72d76f55588e9f5eed670a5e4a0`.
+
+The packaged desktop started with an isolated data directory while an existing worker remained running. This check exposed a fixed-port collision, corrected by allowing the desktop worker to select an available port. The final app fetched real candles, rendered indicators and displayed proportional THB funding allocation using generic test amounts. Full MSI system installation, actual Phantom approval, funded transaction execution, email delivery and signed updater delivery are not established by these checks.

@@ -1,18 +1,18 @@
 # Crypto Bros
 
-Rust desktop workstation for SOL/USDC research and **paper trading**. Dioxus Web runs inside Tauri; the Rust worker keeps running independently of the window. SQLite stores layers, simulated fills, models and feedback locally.
+Rust desktop workstation for SOL/USDC research, paper trading and **individually approved real trades**. Dioxus Web runs inside Tauri; the Rust worker keeps running independently of the window. SQLite keeps separate paper and real ledgers, models and feedback locally.
 
-**0.1.0 is a research preview. It cannot sign or submit real transactions.** A +5% weekly return is a user goal, not a guaranteed return or a reason to relax risk limits. Nothing in this build establishes profitability.
+**0.2.0 prepares real Jupiter swaps and requires your Phantom signature for every order.** Paper mode remains the default; real funding and limits must be configured explicitly. A +5% weekly return is a goal, not a guaranteed return or a reason to relax risk limits. Building and testing this app does not establish profitability or prove a user's mainnet execution.
 
 ## Run the Windows app
 
-Download the installer and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/Rayato159/crypto-bros/releases). Install for the current Windows user, then open **Crypto Bros** from Start. This preview is not Windows code-signed. Updates are manual; the in-app update channel is not configured.
+Download the **x64 MSI** and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/Rayato159/crypto-bros/releases), follow its setup wizard, then open **Crypto Bros** from Start. This preview is not Windows code-signed. Updates are manual; the signed in-app update channel is not configured. Before replacing an installed version, reconcile any signed pending order and choose **Stop bot and quit**. Preserve `%LOCALAPPDATA%\CryptoBros\data`; never delete it to fix an upgrade. Version 0.1 used NSIS and may retain a separate uninstall entry after installing MSI.
 
 1. **Refresh market** loads public SOL/USDC 15-minute candles. Alternatively choose **Load synthetic demo** to explore without a network connection. The app labels synthetic data explicitly.
 2. **Run model research** trains the initial model and searches 64 policy candidates. Inspect the holdout results under Research.
 3. **Select for paper trading**, then **Start paper engine**. Selecting a model alone does not start trading. Manual paper layers are also available.
 4. Inspect each layer's cost, target, review threshold and realized fills. Close part or all of a layer. Profits remain parked until **Release parked profit**.
-5. Close the window to hide it in the tray. Use **Pause paper trading** or **Stop bot and quit** from the tray. Restart always starts paused. Sleep, shutdown or lost connectivity prevents monitoring.
+5. Close the window to hide it in the tray. Use **Pause trading and new buys** or **Stop bot and quit** from the tray. Restart always pauses new entries; signed pending transactions remain queued for reconciliation. Sleep, shutdown or lost connectivity prevents monitoring.
 
 Paper capital starts at 1,000 USDC: 400 protected reserve, four layers with budgets up to 150 USDC including fees. Source changes are blocked after any fill to prevent mixing synthetic and market results. Use a separate `--data-dir` for a separate paper account; preserve your existing data.
 
@@ -24,20 +24,35 @@ Phantom holds the wallet and authorizes signatures. Jupiter finds swap routes an
 2. Follow [Phantom's official new-wallet guide](https://help.phantom.com/articles/45135465489555): Create a New Wallet → Create a Recovery Phrase Wallet. Set the password and privately back up the phrase offline. Do these steps yourself. Never send the phrase to the app, chat, logs, support, or `.env`.
 3. In Crypto Bros → Wallet, choose **Open Phantom connection**. The short-lived page opens in your default browser; that browser/profile must have Phantom. It requests only a public address. If your trading profile differs from the default browser, enter its public address in **Watch a public Solana address** instead.
 4. **Refresh on-chain balance** reads SOL and Solana USDC balances. These balances are separate from paper capital. Connecting an address is not a proof of ownership and does not grant spending rights.
-5. No deposit is needed for paper trading, model research or quote previews. Funding and wallet signing are future live-mode work. An additional account under the same recovery phrase separates balances, not recovery secrets.
+5. No deposit is needed for paper trading, model research or quote previews. For real trading, fund only the separate bot wallet with Solana USDC and native SOL for costs, then follow the Live trading setup below. An additional account under the same recovery phrase separates balances, not recovery secrets.
 
 **Do not put wallet seeds or private keys in `.env`.** The application has no raw-wallet-key configuration or export feature. Agent rules are in [AGENTS.md](AGENTS.md).
+
+## Real trading and THB accounting
+
+1. Connect the dedicated wallet, open **Live trading**, and refresh prices, FX and wallet. Synthetic prices cannot authorize real orders.
+2. Enter the original THB purchase cost, total USDC received from that purchase, and USDC allocated to the bot. The app assigns `original THB × allocated USDC / total USDC` as historical cost, rounded to satang. Confirm separately whether the original amount includes all fees. Personal amounts are never bundled into releases.
+3. Set the maximum active investment, maximum buy and unspent USDC reserve. The first release supports two open layers. Native SOL must separately cover tracked SOL positions, a 0.005 SOL fee buffer, the quoted network fee and any account rent. The buffer is not a per-transaction fee. Gasless and multisigner routes are intentionally unsupported.
+4. Enable manually approved buys. Run research and explicitly select its candidate for live advice. **Prepare model buy** requires a qualifying signal and rechecks the executable quote's estimated round-trip costs. **Prepare manual test buy** bypasses only the signal, retaining every hard limit.
+5. Review the prepared amounts, then open **Review and approve in Phantom**. Chrome is preferred, with the default browser as fallback. Compare the dedicated wallet, amount, minimum receipt and fees in Phantom. The approval link expires quickly; unlock Phantom before preparing a quote.
+6. The worker saves the verified signature before submission. A timeout leaves the order pending. Only finalized chain balances create a fill; clicking twice, restarting, or losing a response cannot authorize a second order. Use **Reconcile transaction now** after an ambiguous result. Do not manually repeat a pending trade elsewhere.
+7. Sell half or all of a tracked layer through the same approval flow. Profits stay parked until released, within the original caps. Targets and review prices are decision thresholds, not guaranteed execution prices.
+
+The live dashboard separates original allocated THB cost, current marked value, bot USDC performance, and bot THB performance since onboarding. Earlier SOL/FX changes belong to historical P&L, not bot returns. USDC/THB comes from a Coinbase reference rate; it is not a guaranteed Bitkub withdrawal rate. Actual network fees are recorded in SOL and valued at the order's reference prices; account rent is recorded separately. Unconfirmed funding fees remain explicitly marked as incomplete. External deposits do not increase limits, and withdrawals below tracked balances block further preparation.
+
+Live buys pause at a layer review price, a 10% loss against starting bot capital, or a 50% loss against allocated historical THB cost. You approve any sale; alerts never fabricate a stop-loss fill. The real account remains bound to its wallet and funding history. Use a separate data directory for another funded account.
 
 ## APIs and optional email
 
 | Service | Current use | Cost / setup |
 |---|---|---|
 | Binance public market data | Completed SOLUSDC candles and ticker, once per minute | Public endpoint; no API key. Regional/network availability may vary. |
-| Jupiter Swap V2 | Quote-only USDC → SOL, no `taker`, signing or submission | Keyless requests supported; optional free API key. Free keyed plan lists 1 request/second. |
-| Solana RPC | Public address balances | Default public RPC; rate limits apply. A private provider is optional. |
+| Jupiter Swap V2 | Quotes, Metis legacy/v0 orders, and execution after a verified Phantom signature | Keyless access where supported; optional API key. Route and network costs still apply. |
+| Solana RPC | Public balances, simulation, fee checks and finalized reconciliation | Default public RPC; rate limits apply. A private provider may be needed for availability/history. |
+| Coinbase Data API | USDC/THB reference valuation | Public exchange-rate endpoint; records local fetch time rather than claiming a provider quote timestamp. |
 | Resend | Optional risk review emails | Requires your API key, verified sender and chosen recipient. Not configured by default. |
 
-Official references: [Binance market-data-only](https://developers.binance.com/en/docs/binance-spot-api-docs/faqs/market_data_only), [Jupiter pricing](https://developers.jup.ag/pricing), [Jupiter quote/order API](https://developers.jup.ag/docs/swap/order-and-execute), [Resend send-email API](https://resend.com/docs/api-reference/emails/send-email). Provider pricing may change. Free data access does not mean free future trading: spread, slippage, network/priority fees and route fees still matter. Charts are rendered locally; no paid chart subscription is required.
+Official references: [Binance market-data-only](https://developers.binance.com/en/docs/binance-spot-api-docs/faqs/market_data_only), [Jupiter pricing](https://developers.jup.ag/pricing), [Jupiter order/execute](https://developers.jup.ag/docs/swap/order-and-execute), [Phantom transaction signing](https://docs.phantom.com/solana/sending-a-transaction), [Coinbase reference rates](https://docs.cdp.coinbase.com/coinbase-app/track-apis/exchange-rates), [Resend email API](https://resend.com/docs/api-reference/emails/send-email). Provider pricing may change. Free data access does not make trading free: spread, slippage, network/priority fees and route fees still matter. Charts render locally; no paid chart subscription is required.
 
 The worker privately loads supported service settings from `.env` **in its data directory**, not from the repository or executable directory. The default Windows location is `%LOCALAPPDATA%\CryptoBros\data`. Copy `.env.example` there yourself and fill optional fields privately. Restart the worker afterward. Never give credentials to a coding agent. The application restricts this directory to the current OS user and SYSTEM on Windows; `.env` remains plaintext. OS credential-store support is not implemented yet.
 
@@ -51,10 +66,11 @@ Candidates are never promoted automatically. Initial public history is only abou
 
 ## Build and development
 
-Requires Windows x64, Rust with the `wasm32-unknown-unknown` target, MSVC build tools, Node/npm, Dioxus CLI 0.7.2 and WebView2. The installer can bootstrap WebView2. Commit `Cargo.lock` and `package-lock.json` for reproducibility.
+Requires Windows x64, Rust with the `wasm32-unknown-unknown` target, MSVC build tools, Node 22 or newer with npm, Dioxus CLI 0.7.2 and WebView2. The installer can bootstrap WebView2. Commit `Cargo.lock` and `package-lock.json` for reproducibility.
 
 ```sh
 npm ci
+npm run test:wallet
 cargo test --locked
 cargo check -p crypto-bros-ui --target wasm32-unknown-unknown --locked
 npm run build
@@ -62,8 +78,8 @@ npm run build
 cargo test --test public_data --locked -- --ignored --nocapture
 ```
 
-CLI worker: `crypto-bros.exe serve`, `status`, `start`, `pause`, `stop`. Optional `--data-dir <folder>` separates accounts; worker `--port 0` chooses a free localhost port. The desktop also accepts `--data-dir <folder>` for isolated checks. The desktop starts its worker on port 48731. A single worker may own a data directory at a time. Do not inspect the private session file; use the CLI or app.
+CLI worker: `crypto-bros.exe serve`, `status`, `start`, `pause`, `stop`. Optional `--data-dir <folder>` separates accounts; worker `--port 0` chooses a free localhost port. The desktop also accepts `--data-dir <folder>` and chooses a free localhost port, so independent accounts do not collide. A single worker may own a data directory at a time. Do not inspect the private session file; use the CLI or app. The Live trading tab can archive a synthetic demo into a local SQLite backup before starting a fresh market account.
 
-The portable Node preparation command builds the worker and web frontend; Tauri produces the current Windows installer in `target/release/bundle/nsis/`. Windows-specific local scripts are excluded from this repository. Desktop packaging on other platforms has not been verified.
+The portable Node preparation command builds the worker and web frontend; Tauri/WiX produces the MSI in `target/release/bundle/msi/`. Node also bundles the local Phantom approval script, so `npm ci` is required before compiling the worker. The approval page does not load a remote CDN script. Windows-specific local scripts are excluded from this repository. Desktop packaging on other platforms has not been verified.
 
 Signed in-app update infrastructure is implemented but unconfigured in this preview. It still needs an HTTPS update manifest and publisher-controlled signing key. See [release instructions](docs/RELEASING.md) and [verification log](docs/DEV_LOG.md).

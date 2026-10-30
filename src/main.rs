@@ -105,6 +105,13 @@ async fn run() -> Result<(), String> {
         .map_err(|_| "Cannot determine local port")?
         .port();
     let store = Store::open(&data_dir.join("portfolio.sqlite"))?;
+    let migration_backup = data_dir.join(format!(
+        "backup-before-{}.sqlite",
+        env!("CARGO_PKG_VERSION")
+    ));
+    if !migration_backup.exists() {
+        store.backup(&migration_backup)?;
+    }
     let mut snapshot = store.load()?;
     snapshot.email_configured = [
         "CRYPTO_BROS_EMAIL_API_KEY",
@@ -141,17 +148,19 @@ async fn run() -> Result<(), String> {
             snapshot,
             store,
             pair_ticket: None,
+            live_ticket: None,
         })),
         token,
         client,
         shutdown: Arc::new(Notify::new()),
         data_dir,
         port,
+        live_guard: Arc::new(Mutex::new(())),
     };
     let job = tokio::spawn(crypto_bros::api::background(state.clone()));
     let shutdown = state.shutdown.clone();
     println!(
-        "Crypto Bros paper service is listening on 127.0.0.1:{port}. Live execution is disabled."
+        "Crypto Bros is listening on 127.0.0.1:{port}. New live entries start paused; every real transaction requires Phantom approval."
     );
     let result = axum::serve(listener, crypto_bros::api::router(state))
         .with_graceful_shutdown(async move {

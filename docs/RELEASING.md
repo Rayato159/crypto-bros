@@ -1,6 +1,6 @@
 # Release and update procedure
 
-Local preview builds an NSIS installer for the current Windows user. Application binaries and frontend assets are the only installer resources. User data belongs under LocalAppData and must survive reinstall/update. Never include `.env`, user databases, models, logs, connection/session files, wallet files or credentials in an artifact or source archive.
+Version 0.2 builds a Tauri/WiX MSI installer. Application binaries and frontend assets are the only installer resources. User data belongs under LocalAppData and must survive reinstall/update. Never include `.env`, user databases, models, logs, connection/session files, wallet files or credentials in an artifact or source archive. Version 0.1's NSIS registration is a separate installer product; do not assume MSI removes that entry.
 
 ## Build a reviewable local artifact
 
@@ -9,7 +9,7 @@ Local preview builds an NSIS installer for the current Windows user. Application
 3. Install into an isolated test directory/account and verify startup, market data, paper trades, restart persistence and tray stop. Confirm that an update starts paused and preserves existing data.
 4. Inspect the exact artifact list and compare SHA256SUMS.txt against each file. Test and label architecture, signing, publishing and installation states separately.
 
-This build has no live transaction queue. `prepare_update` enters a quiescing state, pauses entries, saves state and produces a SQLite `VACUUM INTO` backup including committed WAL data. Further commands that could resume trading are rejected. The desktop verifies the downloaded updater signature before quiescing, then requests shutdown, waits for the worker session to disappear, and launches installation. Restarts always load paused. A future live engine must resolve ambiguous submissions and reconcile confirmed balances before any resume.
+`prepare_update` refuses unresolved signed transactions, cancels unsigned proposals, pauses entries, saves state and produces a SQLite `VACUUM INTO` backup including committed WAL data. Further commands that could resume trading are rejected. The desktop verifies a configured updater's download signature before quiescing, then requests shutdown, waits for the worker session to disappear, and launches installation. Restarts always pause new entries and preserve pending signatures for reconciliation. For a manual MSI update, resolve pending orders and stop the app before starting the installer; a manual installer is not the signed in-app update flow.
 
 ## Configure signed updates privately
 

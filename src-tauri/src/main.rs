@@ -19,6 +19,7 @@ struct ConnectionInfo {
 struct Backend {
     client: reqwest::Client,
     data_dir: PathBuf,
+    startup_error: Option<String>,
 }
 impl Backend {
     fn connection(&self) -> Result<ConnectionInfo, String> {
@@ -28,6 +29,9 @@ impl Backend {
             .map_err(|_| "Background service connection is invalid".into())
     }
     async fn state(&self) -> Result<Value, String> {
+        if let Some(error) = &self.startup_error {
+            return Err(error.clone());
+        }
         let c = self.connection()?;
         let response = self
             .client
@@ -45,6 +49,9 @@ impl Backend {
             .map_err(|_| "Invalid service response".into())
     }
     async fn command(&self, action: &str, payload: Value) -> Result<Value, String> {
+        if let Some(error) = &self.startup_error {
+            return Err(error.clone());
+        }
         let c = self.connection()?;
         let response = self
             .client
@@ -86,6 +93,7 @@ async fn command(
         "balance",
         "demo",
         "demo_step",
+        "archive_demo",
         "activate_paper",
         "start",
         "pause",
@@ -95,6 +103,15 @@ async fn command(
         "feedback",
         "acknowledge",
         "wallet_address",
+        "live_refresh",
+        "live_setup",
+        "enable_live",
+        "live_pause",
+        "live_use_model",
+        "live_reinvest",
+        "live_cancel",
+        "live_prepare",
+        "live_reconcile",
     ]
     .contains(&action.as_str())
     {
@@ -114,6 +131,19 @@ async fn connect_wallet(
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|_| "Could not open your default browser".into())
+}
+#[tauri::command]
+async fn open_live_order(
+    app: tauri::AppHandle,
+    backend: tauri::State<'_, Backend>,
+) -> Result<(), String> {
+    let response = backend.command("live_link", json!({})).await?;
+    let url = response["url"].as_str().ok_or("Invalid approval link")?;
+    // The signing page runs in the browser extension context, never in the desktop webview.
+    app.opener()
+        .open_url(url, Some("chrome"))
+        .or_else(|_| app.opener().open_url(url, None::<&str>))
+        .map_err(|_| "Could not open the approval page in a browser".into())
 }
 #[tauri::command]
 async fn check_update(app: tauri::AppHandle) -> Result<Value, String> {
@@ -193,9 +223,23 @@ fn ensure_worker(
 ) -> Result<(), String> {
     if let Ok(value) = tauri::async_runtime::block_on(backend.state()) {
         if value["app_version"] != env!("CARGO_PKG_VERSION") {
-            return Err("An older worker is running. Stop it before opening this release.".into());
+            tauri::async_runtime::block_on(backend.command("prepare_update",json!({})))
+                .map_err(|e|format!("The older worker could not prepare an update: {e}. Reopen the older app to resolve pending transactions."))?;
+            tauri::async_runtime::block_on(backend.command("shutdown", json!({})))?;
+            for _ in 0..50 {
+                if !dir.join("connection.json").exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            if dir.join("connection.json").exists() {
+                return Err(
+                    "The previous worker has not stopped; restart the app after it exits".into(),
+                );
+            }
+        } else {
+            return Ok(());
         }
-        return Ok(());
     }
     let resource = app
         .path()
@@ -210,7 +254,8 @@ fn ensure_worker(
     };
     if !worker.exists() {
         return Err(
-            "Worker is missing. Run scripts/prepare.ps1 before building the desktop app".into(),
+            "Worker is missing. Reinstall the MSI, or run npm run build when building from source"
+                .into(),
         );
     }
     let mut process = std::process::Command::new(worker);
@@ -218,6 +263,8 @@ fn ensure_worker(
         .arg("serve")
         .arg("--data-dir")
         .arg(dir)
+        .arg("--port")
+        .arg("0")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -235,7 +282,10 @@ fn ensure_worker(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Err("Worker did not become ready. Check that localhost port 48731 is available.".into())
+    Err(
+        "Worker did not become ready. Reopen the app and keep the existing account data intact."
+            .into(),
+    )
 }
 fn main() {
     let app = tauri::Builder::default()
@@ -244,17 +294,26 @@ fn main() {
         .setup(|app| {
             let dir = data_dir()?;
             crypto_bros_core::privacy::protect_directory(&dir)?;
-            let backend = Backend {
+            let mut backend = Backend {
                 client: reqwest::Client::builder()
                     .no_proxy()
                     .timeout(Duration::from_secs(60))
                     .build()?,
                 data_dir: dir.clone(),
+                startup_error: None,
             };
-            ensure_worker(app.handle(), &dir, &backend)?;
+            if let Err(error) = ensure_worker(app.handle(), &dir, &backend) {
+                backend.startup_error = Some(error);
+            }
             app.manage(backend);
             let open = MenuItem::with_id(app, "open", "Open Crypto Bros", true, None::<&str>)?;
-            let pause = MenuItem::with_id(app, "pause", "Pause paper trading", true, None::<&str>)?;
+            let pause = MenuItem::with_id(
+                app,
+                "pause",
+                "Pause trading and new buys",
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "Stop bot and quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &pause, &quit])?;
             let mut tray = TrayIconBuilder::new()
@@ -311,6 +370,7 @@ fn main() {
             snapshot,
             command,
             connect_wallet,
+            open_live_order,
             check_update,
             install_update
         ])

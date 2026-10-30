@@ -196,7 +196,7 @@ pub async fn email(client: &reqwest::Client, message: &str) -> Result<(), String
     let key = std::env::var("CRYPTO_BROS_EMAIL_API_KEY").map_err(|_| "Email is not configured")?;
     let from = std::env::var("CRYPTO_BROS_EMAIL_FROM").map_err(|_| "Email sender is missing")?;
     let to = std::env::var("CRYPTO_BROS_EMAIL_TO").map_err(|_| "Email recipient is missing")?;
-    let result=client.post("https://api.resend.com/emails").bearer_auth(key).json(&json!({"from":from,"to":[to],"subject":"Crypto Bros — paper portfolio risk review","text":message})).send().await.map_err(|_|"Email delivery connection failed")?;
+    let result=client.post("https://api.resend.com/emails").bearer_auth(key).json(&json!({"from":from,"to":[to],"subject":"Crypto Bros — portfolio risk review","text":message})).send().await.map_err(|_|"Email delivery connection failed")?;
     if result.status().is_success() {
         Ok(())
     } else {

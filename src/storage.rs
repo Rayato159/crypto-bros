@@ -25,6 +25,7 @@ impl Store {
                     return Err("Unsupported database schema; refusing to overwrite".into());
                 }
                 s.running = false;
+                s.app_version = env!("CARGO_PKG_VERSION").into();
                 s.optimizing = false;
                 s.live_enabled = false;
                 s.updating = false;

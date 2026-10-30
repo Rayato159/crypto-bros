@@ -4,11 +4,12 @@ use wasm_bindgen::prelude::*;
 
 // A statically bundled bridge avoids eval/Function and keeps the CSP strict.
 #[wasm_bindgen(
-    inline_js = "export async function invoke_json(name, args) { try { if (!window.__TAURI__) throw new Error('Open the installed Crypto Bros app to connect to the engine.'); return JSON.stringify({ok:true,value:await window.__TAURI__.core.invoke(name,JSON.parse(args))}); } catch(e) { return JSON.stringify({ok:false,error:String(e)}); } }"
+    inline_js = "export async function invoke_json(name, args) { try { if (!window.__TAURI__) throw new Error('Open the installed Crypto Bros app to connect to the engine.'); return JSON.stringify({ok:true,value:await window.__TAURI__.core.invoke(name,JSON.parse(args))}); } catch(e) { return JSON.stringify({ok:false,error:String(e)}); } } export function local_time(seconds) { return new Date(seconds*1000).toLocaleString(); }"
 )]
 extern "C" {
     #[wasm_bindgen(catch)]
     async fn invoke_json(name: &str, args: &str) -> Result<JsValue, JsValue>;
+    fn local_time(seconds: f64) -> String;
 }
 
 #[derive(Clone, Copy)]
@@ -56,7 +57,8 @@ async fn run_action(mut ctx: Context, action: String, payload: Value) {
         .set(format!("Working · {}", action.replace('_', " ")));
     match invoke("command", json!({"action":action,"payload":payload})).await {
         Ok(_) => {
-            ctx.notice.set("Saved locally. No real funds moved.".into());
+            ctx.notice
+                .set("Action completed. Check the account and pending-order status below.".into());
             if let Ok(value) = invoke("snapshot", json!({})).await {
                 ctx.state.set(value);
             }
@@ -102,7 +104,7 @@ fn app() -> Element {
                     ctx.state.set(value);
                     if (ctx.notice)().starts_with("Connecting") {
                         ctx.notice
-                            .set("Engine connected · paper trading only".into());
+                            .set("Engine connected · real orders require Phantom approval".into());
                     }
                 }
                 Err(error) => {
@@ -124,16 +126,17 @@ fn app() -> Element {
     let running = data["running"] == true;
     rsx! {
         style {"{include_str!(\"style.css\")}"}
+        style {"{include_str!(\"live.css\")}"}
         div {class:"shell",
             aside {class:"sidebar",div {class:"brand",div {class:"brand-mark","C↗"}div {class:"brand-name",div {"CRYPTO"}div {"BROS"}}}div {class:"workspace-label","PERSONAL TRADING LAB"}
-                nav {for (index,name) in ["Overview","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
-                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.1.0 · RESEARCH PREVIEW"}}
+                nav {for (index,name) in ["Overview","Live trading","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
+                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.2.0 · MANUAL APPROVAL"}}
             }
-            main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge","PAPER TRADING"}}}
+            main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge",if tab()=="Live trading"{"REAL MONEY · PHANTOM"}else if tab()=="Overview"||tab()=="Layers"{"PAPER TRADING"}else{"RESEARCH / ACCOUNT TOOLS"}}}}
                 div {class:"content",
                     if source=="synthetic_demo"{div {class:"demo-banner","SYNTHETIC DATA · Prices, fills and results are simulated. They are not market performance."}}
                     if data["market_error"].is_string(){div {class:"warning","{s(&data[\"market_error\"])}"}}
-                    match tab().as_str(){"Layers"=>rsx!{Layers{}},"Research"=>rsx!{Research{}},"Decisions"=>rsx!{Decisions{}},"Wallet"=>rsx!{Wallet{}},"Settings"=>rsx!{Settings{}},_=>rsx!{Overview{}}}
+                    match tab().as_str(){"Live trading"=>rsx!{LiveTrading{}},"Layers"=>rsx!{Layers{}},"Research"=>rsx!{Research{}},"Decisions"=>rsx!{Decisions{}},"Wallet"=>rsx!{Wallet{}},"Settings"=>rsx!{Settings{}},_=>rsx!{Overview{}}}
                     div {class:"notice",span {class:"notice-label",if busy(){"WORKING"}else{"ACTIVITY"}}span {"{notice()}"}}
                     footer {span {"LOCAL FIRST / SOLANA"}span {"Paper fills ≠ on-chain executions. Weekly target is a goal, never a guarantee."}}
                 }
@@ -177,11 +180,11 @@ fn Overview() -> Element {
         }
         div {class:"bottom-grid",
             section {class:"panel",div {class:"panel-heading",h3 {"Next move"}span {class:"chip","MODEL + RISK CHECK"}}
-                if data["active_model"].is_null(){div {class:"empty",h3 {"An edge needs evidence."}p {"Load candles, run research, then select a model for paper trading. Real-money execution stays disabled."}}}else{div {class:"model-summary",span {class:"big-label","WAIT / BUY / SELL"}p {"Active: {s(&data[\"active_model\"][\"version\"])}"}p {class:"muted","A forecast must clear uncertainty, costs and risk limits."}}}
+                if data["active_model"].is_null(){div {class:"empty",h3 {"An edge needs evidence."}p {"Load candles, run research, then select a model for paper trading. Real accounts have separate controls under Live trading."}}}else{div {class:"model-summary",span {class:"big-label","WAIT / BUY / SELL"}p {"Active: {s(&data[\"active_model\"][\"version\"])}"}p {class:"muted","A forecast must clear uncertainty, costs and risk limits."}}}
                 div {class:"actions",Action {label:"Run model research",action:"research"}Action {label:"Open paper layer",action:"buy"}}
             }
             section {class:"panel",div {class:"panel-heading",h3 {"System watch"}span {class:"chip","LOCAL ENGINE"}}
-                div {class:"watch-row",span {"Live execution"}strong {"DISABLED"}}div {class:"watch-row",span {"Email risk alerts"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}div {class:"watch-row",span {"Weekly target"}strong {"+5% / aspirational"}}
+                div {class:"watch-row",span {"Real-money orders"}strong {"SEPARATE LIVE TAB"}}div {class:"watch-row",span {"Email risk alerts"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}div {class:"watch-row",span {"Weekly target"}strong {"+5% / aspirational"}}
                 for alert in items(&data["alerts"]).into_iter().filter(|a|a["acknowledged"]!=true){div {class:"warning small","{s(&alert[\"message\"])}"}}
                 Action {label:"Acknowledge risk review",action:"acknowledge"}
             }
@@ -259,7 +262,7 @@ fn Wallet() -> Element {
     rsx! {
         div {class:"page-heading",div {div {class:"eyebrow","JUPITER QUOTES / PHANTOM WALLET"}h1 {"Keep the keys\nwhere they belong."}p {"Your wallet signs. Your workstation observes. No recovery phrase required."}}}
         div {class:"bottom-grid",
-            section {class:"panel wallet-card",div {class:"wallet-symbol","◎"}h2 {"Connect Phantom"}p {"A temporary localhost page opens in your browser. This release requests only your public address, with no signature or transfer."}
+            section {class:"panel wallet-card",div {class:"wallet-symbol","◎"}h2 {"Connect Phantom"}p {"This connection step requests only your public address. A real trade uses a separate, expiring approval page and an explicit Phantom signature."}
                 button {class:"button primary",onclick:move |_|{spawn(async move {match invoke("connect_wallet",json!({})).await{Ok(_)=>ctx.notice.set("Phantom connection opened in your browser. No signing request.".into()),Err(e)=>ctx.notice.set(e)}});},"Open Phantom connection ↗"}
                 div {class:"divider"}label {class:"eyebrow","OR WATCH A PUBLIC SOLANA ADDRESS"}input {placeholder:"Public address only — never a seed or key",value:"{address()}",oninput:move |event|address.set(event.value())}Action {label:"Save public address",action:"wallet_address",payload:json!({"address":address()})}
             }
@@ -274,12 +277,109 @@ fn Wallet() -> Element {
     }
 }
 #[component]
+fn LiveField(label: String, mut value: Signal<String>) -> Element {
+    rsx! {label {class:"live-field",span {"{label}"}input {r#type:"text",inputmode:"decimal",value:"{value()}",oninput:move |event|value.set(event.value())}}}
+}
+#[component]
+fn LiveTrading() -> Element {
+    let mut ctx = use_context::<Context>();
+    let data = (ctx.state)();
+    let account = &data["real"];
+    let advice = &data["real_advice"];
+    let source_thb = use_signal(String::new);
+    let source_usdc = use_signal(String::new);
+    let received = use_signal(String::new);
+    let budget = use_signal(|| "20".to_string());
+    let max_buy = use_signal(|| "10".to_string());
+    let reserve = use_signal(String::new);
+    let amount = use_signal(|| "2".to_string());
+    let mut fees_included = use_signal(|| false);
+    let basis = source_thb().parse::<f64>().unwrap_or(0.0)
+        * received().parse::<f64>().unwrap_or(0.0)
+        / source_usdc().parse::<f64>().unwrap_or(0.0);
+    let pending = &account["pending"];
+    let pending_buy = pending["side"] == "buy";
+    let spend_amount = n(&pending["input"]) / if pending_buy { 1e6 } else { 1e9 };
+    let receive_amount = n(&pending["minimum_output"]) / if pending_buy { 1e9 } else { 1e6 };
+    let spend_unit = if pending_buy { "USDC" } else { "SOL" };
+    let receive_unit = if pending_buy { "SOL" } else { "USDC" };
+    let metric = |field: &str, scale: f64, prefix: &str| {
+        if advice[field].is_number() {
+            format!("{prefix}{}", money(n(&advice[field]) / scale))
+        } else {
+            "—".into()
+        }
+    };
+    rsx! {
+        div {class:"page-heading",div {div {class:"eyebrow","REAL WALLET · YOUR SIGNATURE"}h1 {"Trade with a clear limit."}p {"USDC ↔ SOL · two layers · every order approved in Phantom"}}div {class:"actions",Action {label:"Refresh prices, FX & wallet",action:"live_refresh"}Action {label:"Pause new buys",action:"live_pause"}}}
+        if data["wallet"].is_null(){section {class:"panel",h2 {"1. Connect your dedicated bot wallet"}p {"Select the wallet funded for this bot in Phantom. Keep your main reserve in your other wallet."}
+            button {class:"button primary",disabled:(ctx.busy)(),onclick:move |_|{spawn(async move{match invoke("connect_wallet",json!({})).await{Ok(_)=>ctx.notice.set("Choose the bot wallet in Phantom, then return here.".into()),Err(error)=>ctx.notice.set(error)}});},"Connect Phantom in browser ↗"}
+        }}else{p {class:"wallet-address muted small","Bot wallet: {s(&data[\"wallet\"][\"address\"])}"}}
+        if account.is_null(){
+            if data["source"]=="synthetic_demo"{section {class:"panel spaced",h2 {"Move from demo to real market data"}p {"Save the complete synthetic account as a local database backup, then start a fresh paper account. Your connected public wallet is kept."}Action {label:"Archive demo and start fresh",action:"archive_demo"}}}
+            section {class:"panel spaced",h2 {"2. Record funding and original baht cost"}p {"Refresh the market and wallet first. If only part of a larger USDC holding was transferred here, the app allocates its original baht cost proportionally."}
+                div {class:"live-form-grid",LiveField {label:"Original purchase cost · THB",value:source_thb}LiveField {label:"Total USDC obtained from that purchase",value:source_usdc}LiveField {label:"USDC actually received in this bot wallet",value:received}LiveField {label:"Maximum active investment · USDC",value:budget}LiveField {label:"Maximum per buy · USDC",value:max_buy}LiveField {label:"USDC reserve kept unspent here",value:reserve}}
+                label {class:"live-check",input {r#type:"checkbox",checked:fees_included(),onchange:move |event|fees_included.set(event.checked())}span {"The original baht cost includes all purchase and transfer fees"}}
+                if basis.is_finite()&&basis>0.0{p {"Allocated original cost: ฿{money(basis)}. This is separate from the wallet's current market value."}}
+                p {class:"muted small","Hard limits: 2 open layers, 0.5% maximum quote slippage, 0.001 SOL maximum network fee per order. Keep at least 0.005 SOL untouched for future fees, plus enough SOL for this order and any token-account rent. Wallet keys stay in Phantom."}
+                Action {label:"Record funding · keep trading paused",action:"live_setup",kind:"primary",payload:json!({"source_thb":source_thb(),"source_usdc":source_usdc(),"received_usdc":received(),"budget_usdc":budget(),"max_buy_usdc":max_buy(),"reserve_usdc":reserve(),"fees_included":fees_included()})}
+            }
+        }else{
+            div {class:"metrics",Metric {label:"BOT EQUITY · USDC",value:metric("equity_usdc",1e6,""),detail:"Tracked USDC and open SOL at reference price",accent:true}Metric {label:"CURRENT VALUE · THB",value:metric("equity_satang",100.0,"฿"),detail:"USDC/THB reference, not a guaranteed cash-out rate"}Metric {label:"BOT P&L · USDC",value:metric("bot_pnl_usdc",1e6,""),detail:"Since onboarding, after recorded network costs"}Metric {label:"P&L VS ORIGINAL THB COST",value:metric("historical_pnl_satang",100.0,"฿"),detail:"Includes allocated prior price and FX changes"}}
+            section {class:"panel spaced",div {class:"panel-heading",h2 {"Capital and valuation"}span {class:"chip",if data["live_enabled"]==true{"BUYS ENABLED · MANUAL SIGNING"}else{"NEW BUYS PAUSED"}}}
+                div {class:"watch-row",span {"Original allocated cost"}strong {"฿{money(n(&account[\"initial_cost_satang\"])/100.0)}"}}
+                div {class:"watch-row",span {"Bot P&L in baht since onboarding"}strong {"{metric(\"bot_pnl_satang\",100.0,\"฿\")}"}}
+                div {class:"watch-row",span {"Tracked USDC cash / protected reserve"}strong {"{n(&account[\"cash\"])/1e6:.6} / {n(&account[\"config\"][\"reserve\"])/1e6:.6}"}}
+                div {class:"watch-row",span {"Maximum active investment / per buy"}strong {"{money(n(&account[\"config\"][\"trading_budget\"])/1e6)} / {money(n(&account[\"config\"][\"max_buy\"])/1e6)} USDC"}}
+                div {class:"watch-row",span {"Last checked on-chain USDC / native SOL"}strong {"{n(&data[\"real_balances\"][\"usdc\"])/1e6:.6} / {n(&data[\"real_balances\"][\"sol\"])/1e9:.6}"}}
+                div {class:"watch-row",span {"USDC/THB reference"}strong {"฿{n(&data[\"thb_rate\"][\"micros\"])/1e6:.4}"}}
+                p {class:"muted small","Coinbase reference fetched by the app; actual sale-to-baht proceeds may differ. Network costs are recorded separately from recoverable account rent. Refresh after transfers. External deposits do not automatically enlarge the bot's budget."}
+                if account["funding_fees_included"]!=true{p {class:"warning small","Original funding fees were not confirmed as included. Historical baht P&L may omit those costs."}}
+                div {class:"watch-row",span {"Parked realized profit"}strong {"{money(n(&account[\"parked_profit\"])/1e6)} USDC"}}Action {label:"Release profit within existing limits",action:"live_reinvest"}
+            }
+            if pending.is_null(){
+                section {class:"panel spaced",div {class:"panel-heading",h2 {"Next move: {s(&advice[\"action\"])}"}span {class:"chip","ADVICE ≠ AN EXECUTED ORDER"}}p {"{s(&advice[\"reason\"])}"}
+                    div {class:"actions",Action {label:"Enable manually approved buys",action:"enable_live"}Action {label:"Run model research",action:"research"}Action {label:"Use candidate for live advice",action:"live_use_model"}}
+                    p {class:"muted small","An explicitly selected research model uses RSI, MACD and other features. Optimization cannot change your reserve or trade limits. A 5% weekly return is a target, not a promise."}
+                    LiveField {label:"Buy amount · USDC",value:amount}
+                    div {class:"actions",Action {label:"Prepare model buy",action:"live_prepare",kind:"primary",payload:json!({"side":"buy","amount_usdc":amount()})}Action {label:"Prepare manual test buy",action:"live_prepare",payload:json!({"side":"buy","amount_usdc":amount(),"manual":true})}}
+                    p {class:"muted small","Manual test buy bypasses the model signal only. All spending, reserve and loss limits still apply. Preparing an order does not sign or submit it."}
+                }
+            }else{
+                section {class:"panel spaced live-order",div {class:"eyebrow","PENDING REAL ORDER"}h2 {"{s(&pending[\"side\"])} · {s(&pending[\"status\"])}"}
+                    p {"Spend {spend_amount:.6} {spend_unit}"}
+                    p {"Minimum receipt: {receive_amount:.6} {receive_unit}"}
+                    p {"Estimated network fee: {n(&pending[\"network_fee\"])/1e9:.9} SOL"}
+                    if pending["signature"].is_null(){div {class:"actions",button {class:"button primary",disabled:(ctx.busy)(),onclick:move |_|{spawn(async move{match invoke("open_live_order",json!({})).await{Ok(_)=>ctx.notice.set("Approval page opened. Check the wallet and amounts before signing in Phantom.".into()),Err(error)=>ctx.notice.set(error)}});},"Review and approve in Phantom ↗"}Action {label:"Cancel unsigned order",action:"live_cancel"}}}
+                    else{p {class:"wallet-address","Signature: {s(&pending[\"signature\"])}"}p {"Waiting for finalized chain confirmation. Do not repeat the trade in another window."}Action {label:"Reconcile transaction now",action:"live_reconcile"}}
+                    if pending["message"].is_string(){p {class:"warning","{s(&pending[\"message\"])}"}}
+                }
+            }
+            if account["reconciliation_error"].is_string(){p {class:"warning","{s(&account[\"reconciliation_error\"])}"}}
+            section {class:"panel spaced",h2 {"Real SOL layers"}p {class:"muted small","Unrealized P&L includes allocated entry network costs; future exit costs are not yet known."}table {thead {tr {th {"LAYER / OPENED"}th {"SOL"}th {"COST · USDC / THB"}th {"UNREALIZED · USDC / THB"}th {"TARGET / REVIEW · USDC"}th {"PREPARE EXIT"}}}tbody {for layer in items(&account["layers"]){tr {
+                td {"#{n(&layer[\"id\"]) as u64}" div {class:"muted small","{local_time(n(&layer[\"opened_at\"]))}"}}td {"{n(&layer[\"quantity\"])/1e9:.9}"}td {"{money(n(&layer[\"cost_usdc\"])/1e6)} / ฿{money(n(&layer[\"cost_satang\"])/100.0)}"}
+                td {if advice["equity_usdc"].is_number(){"{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])-(n(&layer[\"cost_usdc\"])+n(&layer[\"entry_fee_usdc\"]))/1e6)} / ฿{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])*n(&data[\"thb_rate\"][\"micros\"])/1e6-(n(&layer[\"cost_satang\"])+n(&layer[\"entry_fee_satang\"]))/100.0)}"}else{"—"}}
+                td {"{money(n(&layer[\"target_price\"])/1e6)} / {money(n(&layer[\"review_price\"])/1e6)}"}
+                td {if n(&layer["quantity"])>0.0&&pending.is_null(){div {class:"actions compact",Action {label:"Sell 50%",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":50})}Action {label:"Close layer",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":100})}}}}
+            }}}}}
+            section {class:"panel spaced",h2 {"Confirmed chain journal"}p {class:"muted small","Only finalized transactions appear here. Realized P&L below excludes separately recorded network costs; the account totals above include them."}
+                if items(&account["fills"]).is_empty(){p {"No finalized transactions recorded yet."}}
+                for fill in items(&account["fills"]).into_iter().rev().take(30){div {class:"real-fill",strong {"{s(&fill[\"side\"])} · layer #{n(&fill[\"layer_id\"]) as u64}"}p {"Realized: {money(n(&fill[\"realized_usdc\"])/1e6)} USDC / ฿{money(n(&fill[\"realized_satang\"])/100.0)} · network fee {n(&fill[\"network_fee_lamports\"])/1e9:.9} SOL"}p {class:"wallet-address muted small","{s(&fill[\"signature\"])}"}}}
+            }
+            section {class:"panel spaced",h3 {"Risk watch"}p {"New buys pause at a layer review price, 10% loss against starting bot capital, or 50% loss against allocated historical baht cost. A review never guarantees an automatic sale."}
+                p {class:"muted small",if data["email_configured"]==true{"Email provider configured. Delivery status appears in alerts."}else{"Email is not configured. Configure it privately in Settings if you want alerts while away."}}
+                for alert in items(&data["alerts"]).into_iter().filter(|a|a["acknowledged"]!=true){p {class:"warning small","{s(&alert[\"message\"])}"}}Action {label:"Acknowledge review",action:"acknowledge"}
+            }
+        }
+    }
+}
+#[component]
 fn Settings() -> Element {
     let mut ctx = use_context::<Context>();
     let data = (ctx.state)();
     let mut update = use_signal(|| Value::Null);
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.1.0 · research preview"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.2.0 · manually approved trading"}}}
         div {class:"bottom-grid",
             section {class:"panel",h2 {"Application updates"}p {"Signed releases update the app while preserving your portfolio. The engine pauses and the database is backed up first."}
                 button {class:"button primary",onclick:move |_|{spawn(async move {match invoke("check_update",json!({})).await{Ok(v)=>{ctx.notice.set(s(&v["message"]).to_string());update.set(v);},Err(e)=>ctx.notice.set(e)}});},"Check for updates"}
@@ -289,7 +389,7 @@ fn Settings() -> Element {
             }
             section {class:"panel",h2 {"Connections"}div {class:"watch-row",span {"Jupiter API key"}strong {if data["jupiter_key_configured"]==true{"CONFIGURED"}else{"KEYLESS QUOTES"}}}div {class:"watch-row",span {"Email notifications"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}
                 p {class:"muted small","Configure optional service credentials privately in the application data folder using the .env.example guide, then restart the engine. Secrets are never displayed here."}
-                div {class:"divider"}div {class:"watch-row",span {"Wallet seed / key storage"}strong {"NOT SUPPORTED"}}div {class:"watch-row",span {"Live transaction submission"}strong {"DISABLED"}}
+                div {class:"divider"}div {class:"watch-row",span {"Wallet seed / key storage"}strong {"NOT SUPPORTED"}}div {class:"watch-row",span {"Real transaction signing"}strong {"YOU APPROVE IN PHANTOM"}}
             }
         }
         section {class:"panel spaced",h3 {"Background behavior"}p {"Closing the window keeps the paper engine running in the tray. Choose “Stop bot and quit” from the tray to stop it. A sleeping or offline computer cannot monitor the market or deliver alerts."}p {class:"muted small","Every service restart starts paused. Layers, history, research and feedback remain in the local database."}}

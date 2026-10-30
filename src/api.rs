@@ -25,15 +25,18 @@ pub struct Engine {
     pub snapshot: Snapshot,
     pub store: Store,
     pub pair_ticket: Option<(String, i64)>,
+    pub live_ticket: Option<(String, String, i64)>,
 }
 impl Engine {
-    fn commit(&mut self, event: &str) -> Result<(), String> {
+    pub(crate) fn commit(&mut self, event: &str) -> Result<(), String> {
         if let Err(error) = self.store.save(&self.snapshot, event) {
             // Never continue from a fill that failed to persist.
             if let Ok(saved) = self.store.load() {
                 self.snapshot = saved;
             }
             self.snapshot.running = false;
+            self.snapshot.live_enabled = false;
+            self.live_ticket = None;
             return Err(error);
         }
         Ok(())
@@ -47,6 +50,7 @@ pub struct AppState {
     pub shutdown: Arc<Notify>,
     pub data_dir: PathBuf,
     pub port: u16,
+    pub live_guard: Arc<Mutex<()>>,
 }
 pub fn router(state: AppState) -> Router {
     let secured = Router::new()
@@ -63,6 +67,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/wallet", get(wallet_page))
         .route("/wallet/pair", post(pair_wallet))
+        .route("/live", get(crate::live_api::page))
+        .route("/live-wallet.js", get(crate::live_api::script))
+        .route("/live/preview", post(crate::live_api::preview))
+        .route("/live/submit", post(crate::live_api::submit))
         .with_state(state)
 }
 async fn authorize(State(state): State<AppState>, request: Request, next: Next) -> Response {
@@ -91,8 +99,11 @@ async fn authorize(State(state): State<AppState>, request: Request, next: Next) 
     }
     next.run(request).await
 }
-async fn snapshot(State(state): State<AppState>) -> Json<Snapshot> {
-    Json(state.engine.lock().await.snapshot.clone())
+async fn snapshot(State(state): State<AppState>) -> Json<Value> {
+    let e = state.engine.lock().await;
+    let mut value = json!(&e.snapshot);
+    value["real_advice"] = crate::live_api::advice(&e.snapshot);
+    Json(value)
 }
 #[derive(Deserialize)]
 pub struct Command {
@@ -181,10 +192,14 @@ pub async fn research(state: &AppState) -> Result<(), String> {
     e.commit("research_candidate_saved")
 }
 async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
+    let _live_operation = state.live_guard.lock().await;
     if state.engine.lock().await.snapshot.updating
         && !matches!(cmd.action.as_str(), "shutdown" | "pause")
     {
         return Err("Update in progress; restart the service to resume".into());
+    }
+    if cmd.action.starts_with("live_") || cmd.action == "enable_live" {
+        return crate::live_api::dispatch(state, &cmd.action, &cmd.payload).await;
     }
     match cmd.action.as_str() {
         "refresh" => {
@@ -230,7 +245,34 @@ async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
     }
     let mut e = state.engine.lock().await;
     match cmd.action.as_str() {
+        "archive_demo" => {
+            if e.snapshot.source != "synthetic_demo"
+                || e.snapshot.real.is_some()
+                || e.snapshot.optimizing
+            {
+                return Err(
+                    "Only an idle synthetic demo without a funded real account can be archived"
+                        .into(),
+                );
+            }
+            e.snapshot.running = false;
+            e.commit("demo_paused_for_archive")?;
+            e.store.backup(&state.data_dir.join(format!(
+                "archived-demo-{}.sqlite",
+                chrono::Utc::now().timestamp_millis()
+            )))?;
+            let mut fresh = Snapshot::new()?;
+            fresh.wallet = e.snapshot.wallet.clone();
+            fresh.email_configured = e.snapshot.email_configured;
+            fresh.jupiter_key_configured = e.snapshot.jupiter_key_configured;
+            e.snapshot = fresh;
+        }
         "demo" => {
+            if e.snapshot.real.is_some() {
+                return Err(
+                    "Synthetic prices cannot replace the feed of a funded real account".into(),
+                );
+            }
             if e.snapshot.optimizing {
                 return Err("Wait for research to finish before switching sources".into());
             }
@@ -297,6 +339,7 @@ async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
         }
         "pause" => {
             e.snapshot.running = false;
+            crate::live_api::pause(&mut e);
         }
         "buy" => {
             e.snapshot.paper_buy()?;
@@ -405,6 +448,13 @@ async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
             if !market::valid_address(address) {
                 return Err("Invalid Solana public address".into());
             }
+            if e.snapshot
+                .real
+                .as_ref()
+                .is_some_and(|a| a.address != address)
+            {
+                return Err("This data folder is bound to its funded bot wallet; use a separate account folder for another wallet".into());
+            }
             e.snapshot.wallet = Some(Wallet {
                 address: address.into(),
                 sol: 0.0,
@@ -418,10 +468,20 @@ async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
             return Ok(json!({"url":format!("http://127.0.0.1:{}/wallet#{}",state.port,ticket)}));
         }
         "prepare_update" => {
+            if e.snapshot
+                .real
+                .as_ref()
+                .and_then(|a| a.pending.as_ref())
+                .is_some_and(|p| p.signature.is_some())
+            {
+                return Err(
+                    "A signed transaction is still unresolved; reconcile it before updating".into(),
+                );
+            }
             e.snapshot.running = false;
+            crate::live_api::pause(&mut e);
             e.snapshot.updating = true;
             e.commit("paused_for_update")?;
-            // Paper-only release has no on-chain submissions to resolve.
             let backup = state.data_dir.join(format!(
                 "backup-{}.sqlite",
                 chrono::Utc::now().timestamp_millis()
@@ -431,15 +491,10 @@ async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
         }
         "shutdown" => {
             e.snapshot.running = false;
+            crate::live_api::pause(&mut e);
             e.commit("service_shutdown")?;
             state.shutdown.notify_one();
             return Ok(json!({"ok":true}));
-        }
-        "enable_live" => {
-            return Err(
-                "Live signing and transaction submission are not enabled in this research release"
-                    .into(),
-            );
         }
         _ => return Err("Unknown command".into()),
     }
@@ -476,7 +531,14 @@ async fn pair_wallet(
             Json(json!({"error":"Origin rejected"})),
         );
     }
+    let _operation = state.live_guard.lock().await;
     let mut e = state.engine.lock().await;
+    if e.snapshot.updating {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Update in progress"})),
+        );
+    }
     if !e.pair_ticket.as_ref().is_some_and(|(ticket, expiry)| {
         *ticket == request.ticket && *expiry >= chrono::Utc::now().timestamp()
     }) || !market::valid_address(&request.address)
@@ -484,6 +546,16 @@ async fn pair_wallet(
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error":"Pairing link is invalid or expired"})),
+        );
+    }
+    if e.snapshot
+        .real
+        .as_ref()
+        .is_some_and(|a| a.address != request.address)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"This funded account is bound to its dedicated bot wallet"})),
         );
     }
     e.pair_ticket = None;
@@ -518,12 +590,62 @@ pub async fn background(state: AppState) {
         if live_source {
             let _ = refresh(&state).await;
         }
+        {
+            let _operation = state.live_guard.lock().await;
+            let has_real = state.engine.lock().await.snapshot.real.is_some();
+            if has_real {
+                let _ = crate::live_api::reconcile(&state).await;
+                if let Ok(rate) = crate::chain::rate(&state.client).await {
+                    let mut e = state.engine.lock().await;
+                    e.snapshot.thb_rate = Some(rate);
+                    let advice = crate::live_api::advice(&e.snapshot);
+                    let candle = e.snapshot.candles.last().map_or(0, |c| c.time);
+                    if e.snapshot
+                        .real
+                        .as_ref()
+                        .is_some_and(|a| a.last_advice_candle < candle)
+                        && e.snapshot.fresh()
+                    {
+                        if let Some(a) = e.snapshot.real.as_mut() {
+                            a.last_advice_candle = candle;
+                        }
+                        let action = format!(
+                            "live_advice_{}",
+                            advice["action"].as_str().unwrap_or("wait")
+                        );
+                        e.snapshot.decision(
+                            &action,
+                            advice["reason"]
+                                .as_str()
+                                .unwrap_or("No live advice available")
+                                .into(),
+                            advice["forecast"].as_f64().unwrap_or(0.0),
+                            advice["net_edge"].as_f64().unwrap_or(0.0),
+                        );
+                        let version = e
+                            .snapshot
+                            .real
+                            .as_ref()
+                            .and_then(|a| a.advice_model.as_ref())
+                            .map_or("manual-live".into(), |m| m.version.clone());
+                        if let Some(d) = e.snapshot.decisions.last_mut() {
+                            d.model = version;
+                        }
+                    }
+                    if advice["risk_blocked"] == true {
+                        e.snapshot.live_enabled = false;
+                        e.snapshot.alert("REAL account risk review: a layer review price, 10% bot-capital loss or 50% allocated historical THB-cost loss has been reached. New buys are paused. No automatic stop-loss sale was executed; review and approve any sale in Phantom.".into());
+                    }
+                    let _ = e.commit("real_valuation_refreshed");
+                }
+            }
+        }
         if should_research {
             let _ = research(&state).await;
         }
         let email_job = {
             let e = state.engine.lock().await;
-            e.snapshot.alerts.iter().find(|a|!a.acknowledged && a.attempts<3 && (a.email_status=="queued" || a.email_status=="retry")).map(|a|(a.id,format!("{}\nPaper equity: {:.2} USDC\nReturn: {:.2}%\nDrawdown: {:.2}%\nNo real orders were sent. Open Crypto Bros to review.",a.message,e.snapshot.equity,e.snapshot.net_return*100.0,e.snapshot.drawdown*100.0)))
+            e.snapshot.alerts.iter().find(|a|!a.acknowledged && a.attempts<3 && (a.email_status=="queued" || a.email_status=="retry")).map(|a|(a.id,format!("{}\nOpen Crypto Bros to review the relevant real or paper account. Real sales require your Phantom approval; risk alerts do not execute stop-loss orders.",a.message)))
         };
         if let Some((id, message)) = email_job {
             let result = market::email(&state.client, &message).await;

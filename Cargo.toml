@@ -1,8 +1,8 @@
 [package]
 name = "crypto-bros"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Local-first SOL/USDC paper trading research workstation"
+description = "SOL/USDC research workstation with Phantom-approved trading"
 license = "MIT"
 
 [workspace]
@@ -24,6 +24,9 @@ dotenvy = "0.15"
 directories = "6"
 thiserror = "2"
 bs58 = "0.5"
+base64 = "0.22"
+sha2 = "0.10"
+ed25519-dalek = "2"
 
 [dev-dependencies]
 tempfile = "3"

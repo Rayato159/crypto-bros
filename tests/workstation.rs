@@ -33,12 +33,14 @@ impl Harness {
                 snapshot: Snapshot::new().expect("state"),
                 store,
                 pair_ticket: None,
+                live_ticket: None,
             })),
             token: "isolated-test-token-not-a-wallet-secret".into(),
             client: reqwest::Client::new(),
             shutdown: Arc::new(Notify::new()),
             data_dir: dir.path().into(),
             port,
+            live_guard: Arc::new(Mutex::new(())),
         };
         let app = api::router(state.clone());
         let task = tokio::spawn(async move {
@@ -102,6 +104,202 @@ async fn local_api_requires_token_and_rejects_foreign_origins() {
         200
     );
     assert_eq!(h.command("enable_live", json!({})).await.0, 400);
+}
+
+fn real_fixture() -> crypto_bros::live::RealAccount {
+    use crypto_bros::live::{LiveConfig, RealAccount, ThbRate};
+    RealAccount::new(
+        crypto_bros::solana_wire::SYSTEM.into(),
+        30_000_000,
+        120_000_000,
+        420_000,
+        true,
+        LiveConfig {
+            trading_budget: 20_000_000,
+            max_buy: 10_000_000,
+            reserve: 10_000_000,
+            max_layers: 2,
+            sol_gas_reserve: 5_000_000,
+            max_network_fee: 1_000_000,
+            slippage_bps: 50,
+        },
+        &ThbRate {
+            micros: 34_000_000,
+            fetched_at: 0,
+            source: "synthetic-test".into(),
+        },
+        0,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn moving_from_demo_preserves_the_complete_old_account_in_a_backup() {
+    let h = Harness::new().await;
+    h.ok("demo", json!({})).await;
+    h.ok("buy", json!({})).await;
+    let old_quantity = h.state.engine.lock().await.snapshot.ledger.layers[0].quantity;
+    h.ok("archive_demo", json!({})).await;
+    {
+        let e = h.state.engine.lock().await;
+        assert_eq!(e.snapshot.source, "not_loaded");
+        assert!(e.snapshot.ledger.layers.is_empty());
+        assert!(!e.snapshot.running);
+    }
+    let backup = std::fs::read_dir(h._dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("archived-demo-")
+        })
+        .unwrap();
+    let archived = Store::open(&backup).unwrap().load().unwrap();
+    assert_eq!(archived.ledger.layers[0].quantity, old_quantity);
+    assert_eq!(archived.source, "synthetic_demo");
+}
+fn pending_fixture() -> crypto_bros::live::PendingOrder {
+    crypto_bros::live::PendingOrder {
+        id: "synthetic-order".into(),
+        side: "buy".into(),
+        layer_id: 0,
+        input: 1_000_000,
+        expected_output: 10_000_000,
+        minimum_output: 9_900_000,
+        unsigned_transaction: String::new(),
+        request_id: "synthetic".into(),
+        last_valid_block_height: 1,
+        prepared_at: 0,
+        expires_at: chrono::Utc::now().timestamp() + 60,
+        signature: None,
+        status: "awaiting_approval".into(),
+        network_fee: 5000,
+        rent_delta: 0,
+        rate: crypto_bros::live::ThbRate {
+            micros: 34_000_000,
+            fetched_at: 0,
+            source: "synthetic-test".into(),
+        },
+        price: 100_000_000,
+        target_price: 110_000_000,
+        review_price: 90_000_000,
+        model: "synthetic".into(),
+        message: None,
+    }
+}
+#[tokio::test]
+async fn signed_orders_survive_restart_and_block_updates_or_cancellation() {
+    let h = Harness::new().await;
+    {
+        let mut e = h.state.engine.lock().await;
+        let mut account = real_fixture();
+        let mut order = pending_fixture();
+        order.signature = Some("synthetic-pending-signature".into());
+        account.pending = Some(order);
+        e.snapshot.real = Some(account);
+        e.snapshot.live_enabled = true;
+        let snapshot = e.snapshot.clone();
+        e.store.save(&snapshot, "test_pending").unwrap();
+        let reloaded = e.store.load().unwrap();
+        assert!(!reloaded.live_enabled);
+        assert!(reloaded.real.unwrap().pending.unwrap().signature.is_some());
+    }
+    assert_eq!(h.command("prepare_update", json!({})).await.0, 400);
+    assert_eq!(h.command("live_cancel", json!({})).await.0, 400);
+    h.ok("pause", json!({})).await;
+    let e = h.state.engine.lock().await;
+    assert!(e.snapshot.real.as_ref().unwrap().pending.is_some());
+    assert!(!e.snapshot.live_enabled);
+}
+#[tokio::test]
+async fn approval_is_origin_bound_expiring_and_invalidated_by_pause() {
+    let h = Harness::new().await;
+    {
+        let mut e = h.state.engine.lock().await;
+        let mut account = real_fixture();
+        account.pending = Some(pending_fixture());
+        e.snapshot.real = Some(account);
+        e.snapshot.live_enabled = true;
+    }
+    let (status, link) = h.command("live_link", json!({})).await;
+    assert_eq!(status, 200);
+    let ticket = link["url"].as_str().unwrap().split('#').nth(1).unwrap();
+    let body = json!({"ticket":ticket});
+    let url = format!("{}/live/preview", h.base);
+    assert_eq!(
+        h.client
+            .post(&url)
+            .header("origin", "https://untrusted.example")
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        h.client
+            .post(&url)
+            .header("origin", &h.base)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    h.ok("live_pause", json!({})).await;
+    assert_eq!(
+        h.client
+            .post(&url)
+            .header("origin", &h.base)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert!(
+        h.state
+            .engine
+            .lock()
+            .await
+            .snapshot
+            .real
+            .as_ref()
+            .unwrap()
+            .pending
+            .is_none()
+    );
+}
+#[tokio::test]
+async fn real_account_does_not_inherit_paper_money_and_cannot_change_wallet() {
+    let h = Harness::new().await;
+    {
+        h.state.engine.lock().await.snapshot.real = Some(real_fixture());
+    }
+    let e = h.state.engine.lock().await;
+    assert_eq!(e.snapshot.ledger.cash, 1_000_000_000);
+    assert_eq!(e.snapshot.real.as_ref().unwrap().cash, 30_000_000);
+    assert_eq!(
+        e.snapshot.real.as_ref().unwrap().initial_cost_satang,
+        105_000
+    );
+    drop(e);
+    assert_eq!(
+        h.command(
+            "wallet_address",
+            json!({"address":"So11111111111111111111111111111111111111112"})
+        )
+        .await
+        .0,
+        400
+    );
+    assert_eq!(h.command("demo", json!({})).await.0, 400);
 }
 
 #[tokio::test]

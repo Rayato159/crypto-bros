@@ -98,7 +98,7 @@ fn friendly_error(error: &str) -> String {
     {
         "โมเดลยังแนะนำให้รอ โอกาสกำไรยังไม่ผ่านความไม่แน่นอนและต้นทุน จึงยังไม่เตรียมซื้อ".into()
     } else if error.contains("holdout") || error.contains("new candles") {
-        "ยังไม่มีข้อมูลราคาใหม่พอสำหรับทดสอบสูตรรอบใหม่ ใช้สูตรเดิมเฝ้าต่อได้".into()
+        "ยังมีแท่งราคาใหม่ไม่พอ ทดสอบสูตรรอบใหม่ต้องรอประมาณ 180 แท่ง 15 นาที (ราว 45 ชั่วโมง) เพื่อไม่ใช้ข้อมูลทดสอบซ้ำ หากสูตรเดิมผ่านเกณฑ์ยังใช้เฝ้าต่อได้".into()
     } else if error.contains("consume the model") {
         "ราคาจริงและค่าธรรมเนียมกินโอกาสกำไรที่โมเดลประเมินไว้ ระบบจึงไม่เตรียมซื้อ".into()
     } else {
@@ -183,7 +183,7 @@ fn app() -> Element {
         div {class:"shell",
             aside {class:"sidebar",div {class:"brand",div {class:"brand-mark","C↗"}div {class:"brand-name",div {"CRYPTO"}div {"BROS"}}}div {class:"workspace-label","PERSONAL TRADING LAB"}
                 nav {for (index,name) in ["Overview","Live trading","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
-                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.5.0 · MANUAL APPROVAL"}}
+                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.5.1 · MANUAL APPROVAL"}}
             }
             main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge",if tab()=="Live trading"{"REAL MONEY · PHANTOM"}else if tab()=="Overview"||tab()=="Layers"{"PAPER TRADING"}else{"RESEARCH / ACCOUNT TOOLS"}}}}
                 div {class:"content",
@@ -364,12 +364,13 @@ fn TradeWatch() -> Element {
                     let key=s(&signal["key"]).to_owned();
                     let skip_key=key.clone();
                     let is_buy=signal["side"]=="buy";
-                    rsx!{article {class:if signal["risk"]==true{"signal-card risk"}else{"signal-card"},
+                    rsx!{article {class:if signal["risk"]==true{"signal-card risk"}else if signal["below_cost_basis"]==true{"signal-card cost"}else{"signal-card"},
                         h3 {"{s(&signal[\"title\"])}"}
                         p {class:"signal-reason","{s(&signal[\"reason\"])}"}
                         p {class:"signal-money",if is_buy {"ใช้ {money(n(&signal[\"amount_usdc\"])/1e6)} USDC · ประมาณ ฿{money(n(&signal[\"value_satang\"])/100.0)}"}
                             else {"เสนอขาย SOL ของไม้ #{n(&signal[\"layer_id\"]) as u64} จำนวน {n(&signal[\"quantity_sol\"])/1e9:.9} SOL (ไม่แตะส่วนสำรอง)"}}
                         if !is_buy {p {"ผลกำไร/ขาดทุน ณ ราคาอ้างอิง: {money(n(&signal[\"pnl_usdc\"])/1e6)} USDC / ฿{money(n(&signal[\"pnl_satang\"])/100.0)}"}}
+                        if signal["below_cost_basis"]==true {p {class:"cost-warning","ถึงเป้าราคาไม่ได้แปลว่ากำไรทั้งสองสกุล ตอนนี้ยังไม่คุ้มต้นทุน USDC หรือบาท ต้องตรวจราคาจริงและค่าขายก่อน หากกำไรไม่ครบทั้งสองสกุล ระบบจะยังไม่เตรียมขายทำกำไร"}}
                         p {class:"signal-estimate","ตัวเลขยังเป็นประมาณการก่อนค่าใช้จ่ายขาออก กดแล้วจะตรวจราคาจริงใหม่ หากสัญญาณเปลี่ยนจะไม่เตรียมคำสั่ง"}
                         div {class:"actions",
                             button {class:"button primary",disabled:(ctx.busy)()||!connected,onclick:move |_|{
@@ -474,12 +475,15 @@ fn LiveTrading() -> Element {
                 }
             }
             if account["reconciliation_error"].is_string(){p {class:"warning","{s(&account[\"reconciliation_error\"])}"}}
-            section {class:"panel spaced",h2 {"SOL ที่ถือ แยกตามไม้"}p {class:"muted small","ต้นทุนและกำไรของทั้งไม้รวมส่วนสำรอง แต่ปุ่มขายใช้ได้เฉพาะส่วนเทรด ยังไม่หักค่าใช้จ่ายขาออกจนกว่าจะตรวจราคาจริง"}table {thead {tr {th {"LAYER / OPENED"}th {"SOL"}th {"COST · USDC / THB"}th {"UNREALIZED · USDC / THB"}th {"TARGET / REVIEW · USDC"}th {"PREPARE EXIT"}}}tbody {for layer in items(&account["layers"]){tr {
-                td {"#{n(&layer[\"id\"]) as u64}" div {class:"muted small","{local_time(n(&layer[\"opened_at\"]))}"}}td {"{n(&layer[\"quantity\"])/1e9:.9}" p {class:"muted small","สำรอง {n(&layer[\"reserved_quantity\"])/1e9:.9}"}}td {"{money(n(&layer[\"cost_usdc\"])/1e6)} / ฿{money(n(&layer[\"cost_satang\"])/100.0)}"}
+            section {class:"panel spaced",h2 {"SOL ที่ถือ แยกตามไม้"}p {class:"muted small","ยอดและต้นทุนของทั้งไม้รวมสำรองในไม้นี้ แต่ปุ่มขายใช้เฉพาะส่วนเทรด กำไรค้างยังไม่หักค่าขาย SOL สำหรับค่าธรรมเนียมที่อยู่นอกไม้ไม่ได้รวมในตารางนี้"}div {class:"layer-table",table {thead {tr {th {"ไม้ / เวลาบันทึก"}th {"จำนวน SOL"}th {"ต้นทุน · USDC / บาท"}th {"กำไรค้าง · USDC / บาท"}th {"เป้า / ทบทวน · USDC ต่อ SOL"}th {"เตรียมขายเอง"}}}tbody {for layer in items(&account["layers"]){tr {
+                td {"#{n(&layer[\"id\"]) as u64}" div {class:"muted small","{local_time(n(&layer[\"opened_at\"]))}"}if layer["model"]=="imported-sol-from-original-capital" {div {class:"muted small","นำเข้า SOL เดิม"}}}td {"{n(&layer[\"quantity\"])/1e9:.9}" p {class:"muted small","สำรองในไม้ {n(&layer[\"reserved_quantity\"])/1e9:.9}"}}td {"{money(n(&layer[\"cost_usdc\"])/1e6)} / ฿{money(n(&layer[\"cost_satang\"])/100.0)}"}
                 td {if advice["equity_usdc"].is_number(){"{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])-(n(&layer[\"cost_usdc\"])+n(&layer[\"entry_fee_usdc\"]))/1e6)} / ฿{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])*n(&data[\"thb_rate\"][\"micros\"])/1e6-(n(&layer[\"cost_satang\"])+n(&layer[\"entry_fee_satang\"]))/100.0)}"}else{"—"}}
                 td {"{money(n(&layer[\"target_price\"])/1e6)} / {money(n(&layer[\"review_price\"])/1e6)}"}
-                td {if n(&layer["quantity"])>n(&layer["reserved_quantity"])&&pending.is_null(){div {class:"actions compact",Action {label:"ขายครึ่งของส่วนเทรด",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":50})}Action {label:"ขายส่วนเทรดทั้งหมด",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":100})}}}}
+                td {if n(&layer["quantity"])>n(&layer["reserved_quantity"])&&pending.is_null(){div {class:"actions compact",Action {label:"เตรียมขาย 50%",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":50})}Action {label:"เตรียมขายทั้งหมด",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":100})}}}}
             }}}}}
+                p {class:"muted small","เป้า = ราคาที่เริ่มตรวจขายทำกำไร / ทบทวน = ราคาที่เตือนความเสี่ยง ไม่ใช่คำสั่งขายอัตโนมัติ ปุ่มขายเองอาจขายขาดทุนได้ ทุกครั้งยังต้องตรวจและเซ็นใน Phantom"}
+                if items(&account["layers"]).iter().any(|l| l["model"]=="imported-sol-from-original-capital") {p {class:"muted small","ไม้ที่นำเข้า SOL เดิม: เป้าคำนวณจากต้นทุน USDC เดิม แต่จุดทบทวนอิงราคาเมื่อนำเข้า จึงอาจสูงกว่าเป้าได้ ส่วนที่กันไว้จ่ายค่าธรรมเนียมอยู่นอกไม้นี้"}}
+            }
             section {class:"panel spaced",h2 {"ประวัติซื้อขายที่เครือข่ายยืนยันแล้ว"}p {class:"muted small","Only finalized transactions appear here. Realized P&L below excludes separately recorded network costs; the account totals above include them."}
                 if items(&account["fills"]).is_empty(){p {"ยังไม่มีรายการซื้อขายที่ยืนยันแล้ว"}}
                 for fill in items(&account["fills"]).into_iter().rev().take(30){div {class:"real-fill",strong {"{s(&fill[\"side\"])} · layer #{n(&fill[\"layer_id\"]) as u64}"}p {"Realized: {money(n(&fill[\"realized_usdc\"])/1e6)} USDC / ฿{money(n(&fill[\"realized_satang\"])/100.0)} · network fee {n(&fill[\"network_fee_lamports\"])/1e9:.9} SOL"}p {class:"wallet-address muted small","{s(&fill[\"signature\"])}"}}}
@@ -496,7 +500,7 @@ fn Settings() -> Element {
     let ctx = use_context::<Context>();
     let data = (ctx.state)();
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.5.0 · manually approved trading"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.5.1 · manually approved trading"}}}
         div {class:"bottom-grid",
             updates_ui::Updates{}
             section {class:"panel",h2 {"Connections"}div {class:"watch-row",span {"Jupiter API key"}strong {if data["jupiter_key_configured"]==true{"CONFIGURED"}else{"KEYLESS QUOTES"}}}div {class:"watch-row",span {"Email notifications"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}

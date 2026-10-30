@@ -1,5 +1,7 @@
 # Crypto Bros
 
+**0.5.1 fixes `Unexpected token account program` for closed wrapped-SOL accounts returned by swap simulation.** It also explains target prices versus cost recovery, labels imported SOL, and enlarges manual-sale buttons. A target hit can still be unprofitable in baht: a profit-triggered proposal must cover costs in both USDC and reference THB at the actual quote minimum. Manual partial/full sales remain explicit user decisions and may realize a loss; every sale requires Phantom approval.
+
 Rust desktop workstation for SOL/USDC research, paper trading and **individually approved real trades**. Dioxus Web runs inside Tauri; the Rust worker keeps running independently of the window. SQLite keeps separate paper and real ledgers, models and feedback locally.
 
 **0.5.0 enforces research eligibility, adds explicit 20/80 reserve allocation and optimizes bounded buy/sell sizes.** Every real Jupiter swap still requires your Phantom signature. Paper mode remains the default; real funding and limits must be configured explicitly. Targets follow each layer and estimated costs. There is no mandatory daily or weekly return and no pressure to enter a trade while the computer is running. Building and testing this app does not establish profitability or prove a user's mainnet execution.

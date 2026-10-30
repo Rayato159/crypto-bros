@@ -1,4 +1,8 @@
 /* Comfortable desktop reading, including Thai labels and high-DPI displays. */
+.compact .button{font-size:16px;padding:10px 14px;min-height:48px}
+.layer-table{overflow-x:auto}.layer-table th{white-space:normal;min-width:150px}
+.signal-card.cost{background:#302b1b;border-color:#b6a365}
+.cost-warning{color:#f4dfa6;font-size:16px;line-height:1.7}
 body{font-family:"Segoe UI",Tahoma,system-ui,sans-serif;font-size:16px;line-height:1.65}
 .eyebrow,.metric .eyebrow{font-size:14px;letter-spacing:.035em;line-height:1.6}
 .metric-value{font-size:36px;line-height:1.25;font-variant-numeric:tabular-nums}

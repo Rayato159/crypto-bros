@@ -153,11 +153,12 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
         let pnl = value as i128 - basis as i128;
         let value_thb = rate.satang(value).unwrap_or(0);
         let pnl_thb = value_thb as i128 - basis_thb as i128;
+        let below_basis = !risk && (pnl <= 0 || pnl_thb <= 0);
         signals.push(json!({"key":key,"side":"sell","risk":risk,"layer_id":l.id,
-            "title":if risk {format!("ทบทวนขายไม้ #{} เพื่อลดความเสี่ยง",l.id)} else {format!("ไม้ #{} ถึงราคาเป้าหมายแล้ว",l.id)},
+            "title":if risk {format!("ทบทวนขายไม้ #{} เพื่อลดความเสี่ยง",l.id)} else if below_basis {format!("ไม้ #{} ถึงราคาเป้า แต่ยังไม่คุ้มต้นทุน",l.id)} else {format!("ไม้ #{} ถึงราคาเป้าหมายแล้ว",l.id)},
             "reason":if risk {"ถึงเกณฑ์ทบทวนความเสี่ยงของไม้หรือเงินทุน หยุดซื้อเพิ่มและตรวจรายการขาย"} else {"ราคาตลาดถึงเป้าหมายขายที่บันทึกไว้ตอนเข้าไม้"},
             "quantity_sol":quantity,"amount_usdc":value,"value_satang":value_thb,
-            "pnl_usdc":pnl,"pnl_satang":pnl_thb,
+            "pnl_usdc":pnl,"pnl_satang":pnl_thb,"below_cost_basis":below_basis,
             "button":"ตรวจราคาขาย → Phantom","observed_at":s.updated_at,"expires_at":s.updated_at+120}));
     }
     signals.sort_by_key(|v| v["risk"] != true);

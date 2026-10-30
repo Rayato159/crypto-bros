@@ -171,6 +171,29 @@ fn risk_exit_wins_over_new_buys() {
     assert_eq!(c[0]["side"], "sell");
 }
 #[test]
+fn target_card_explains_positive_usdc_but_negative_thb_without_bypassing_exit_gate() {
+    let mut s = fixture();
+    layer(&mut s, 1);
+    s.price = 112.0;
+    s.thb_rate.as_mut().unwrap().micros = 30_000_000;
+    let c = cards(&s);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0]["risk"], false);
+    assert_eq!(c[0]["below_cost_basis"], true);
+    assert!(c[0]["title"].as_str().unwrap().contains("ยังไม่คุ้มต้นทุน"));
+    assert!(c[0]["pnl_usdc"].as_i64().unwrap() > 0);
+    assert!(c[0]["pnl_satang"].as_i64().unwrap() < 0);
+    let l = &s.real.as_ref().unwrap().layers[0];
+    assert!(!watch::profit_exit_covers_costs(
+        l,
+        l.quantity,
+        11_200_000,
+        5000,
+        112 * USDC,
+        s.thb_rate.as_ref().unwrap()
+    ));
+}
+#[test]
 fn target_exit_must_clear_entry_and_exit_costs_at_the_quote_minimum() {
     let mut s = fixture();
     layer(&mut s, 1);

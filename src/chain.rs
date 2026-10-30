@@ -106,6 +106,18 @@ fn token(value: &Value, owner: &str, mint: &str) -> Result<(u64, u64), String> {
     if value.is_null() {
         return Ok((0, 0));
     }
+    // Callers request the wallet's canonical ATAs. After WSOL CloseAccount, RPC
+    // simulation may return this empty System account instead of null. No token
+    // balance or rent remains. Never extend this to funded/data-bearing accounts.
+    if mint == SOL_MINT
+        && value["owner"] == wire::SYSTEM
+        && value["lamports"].as_u64() == Some(0)
+        && value["executable"] == false
+        && value["data"] == json!(["", "base64"])
+        && value.get("space").is_none_or(|v| v.as_u64() == Some(0))
+    {
+        return Ok((0, 0));
+    }
     if value["owner"] != wire::TOKEN || value["executable"] == true {
         return Err("Unexpected token account program".into());
     }
@@ -273,7 +285,8 @@ pub async fn inspect(
             }
         }
     }
-    let before = balances_from(&accounts(client, &wallet_keys).await?, &account.address)?;
+    let before = balances_from(&accounts(client, &wallet_keys).await?, &account.address)
+        .map_err(|e| format!("Before swap: {e}"))?;
     let tracked_sol = account.layers.iter().try_fold(0_u64, |sum, layer| {
         sum.checked_add(layer.quantity)
             .ok_or("Tracked SOL overflow")
@@ -315,7 +328,8 @@ pub async fn inspect(
             .as_array()
             .ok_or("Simulation did not return account balances")?,
         &account.address,
-    )?;
+    )
+    .map_err(|e| format!("After swap simulation: {e}"))?;
     let (input, output, rent) = execution_deltas(&before, &after, fee, &order.side)?;
     let next_tracked_sol = if order.side == "buy" {
         tracked_sol.checked_add(output)
@@ -642,6 +656,98 @@ mod tests {
     use crate::live::SOL;
     use ed25519_dalek::{Signer, SigningKey};
     use sha2::{Digest, Sha256};
+
+    fn token_account_fixture(owner: &str, mint: &str, amount: u64) -> Value {
+        let mut data = vec![0; 165];
+        data[..32].copy_from_slice(&wire::key(mint).unwrap());
+        data[32..64].copy_from_slice(&wire::key(owner).unwrap());
+        data[64..72].copy_from_slice(&amount.to_le_bytes());
+        data[108] = 1;
+        json!({"owner":wire::TOKEN,"executable":false,"lamports":2_039_280,
+            "data":[STANDARD.encode(data),"base64"],"space":165})
+    }
+
+    fn closed_wsol_fixture() -> Value {
+        // SPL Token CloseAccount drains lamports, assigns System and resizes to zero.
+        // Public account-state fixture only; no wallet key or signed transaction.
+        json!({"owner":wire::SYSTEM,"executable":false,"lamports":0,
+            "data":["","base64"],"space":0})
+    }
+
+    #[test]
+    fn closed_wsol_simulation_preserves_buy_and_sell_deltas() {
+        let owner = bs58::encode([7; 32]).into_string();
+        let wallet = |sol| json!({"owner":wire::SYSTEM,"executable":false,"lamports":sol});
+        let before = balances_from(
+            &[
+                wallet(SOL),
+                token_account_fixture(&owner, USDC_MINT, 20_000_000),
+                Value::Null,
+            ],
+            &owner,
+        )
+        .unwrap();
+        for (side, sol, usdc, expected) in [
+            (
+                "buy",
+                SOL + 100_000_000 - 5000,
+                10_000_000,
+                (10_000_000, 100_000_000, 0),
+            ),
+            (
+                "sell",
+                SOL - 100_000_000 - 5000,
+                30_000_000,
+                (100_000_000, 10_000_000, 0),
+            ),
+        ] {
+            let after = balances_from(
+                &[
+                    wallet(sol),
+                    token_account_fixture(&owner, USDC_MINT, usdc),
+                    closed_wsol_fixture(),
+                ],
+                &owner,
+            )
+            .expect("closed WSOL is an empty account, not a foreign token program");
+            assert_eq!(after.wrapped_sol, 0);
+            assert_eq!(after.rent, before.rent);
+            assert_eq!(
+                execution_deltas(&before, &after, 5000, side).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn empty_wsol_exception_rejects_funds_data_wrong_program_and_missing_fields() {
+        let owner = bs58::encode([7; 32]).into_string();
+        for (field, value) in [
+            ("owner", json!(wire::TOKEN_2022)),
+            ("owner", json!(wire::JUPITER)),
+            ("executable", json!(true)),
+            ("lamports", json!(1)),
+            ("data", json!([STANDARD.encode([0]), "base64"])),
+            ("data", json!(["", "base58"])),
+            ("space", json!(165)),
+        ] {
+            let mut malformed = closed_wsol_fixture();
+            malformed[field] = value;
+            assert!(token(&malformed, &owner, SOL_MINT).is_err(), "{field}");
+        }
+        for field in ["owner", "executable", "lamports", "data"] {
+            let mut malformed = closed_wsol_fixture();
+            malformed.as_object_mut().unwrap().remove(field);
+            assert!(
+                token(&malformed, &owner, SOL_MINT).is_err(),
+                "missing {field}"
+            );
+        }
+        assert!(token(&closed_wsol_fixture(), &owner, USDC_MINT).is_err());
+        let mut no_space = closed_wsol_fixture();
+        no_space.as_object_mut().unwrap().remove("space");
+        assert_eq!(token(&no_space, &owner, SOL_MINT).unwrap(), (0, 0));
+    }
     #[test]
     fn finalized_receipt_uses_exact_signed_bytes_and_atomic_balance_changes() {
         let seed: [u8; 32] = Sha256::digest(uuid::Uuid::new_v4().as_bytes()).into();

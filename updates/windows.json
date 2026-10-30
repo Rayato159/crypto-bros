@@ -1,11 +1,11 @@
 {
-  "version": "0.5.0",
-  "notes": "Mandatory model evidence gates, protected 20/80 USDC and SOL allocation, original-capital SOL import, and bounded optimized buy/partial-exit sizing. Configure allocation and select passing new research before model buys. Every real swap still requires Phantom approval.",
-  "pub_date": "2026-10-30T21:11:33.128Z",
+  "version": "0.5.1",
+  "notes": "Fix closed wrapped-SOL account inspection during swap simulation. Explain target hits versus USDC and baht cost recovery, label imported SOL and enlarge sale buttons. Every real trade still requires manual Phantom approval.",
+  "pub_date": "2026-10-30T21:51:13.860Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUzk3UTVoajl2UFV5SkFNN1JSUVFwQ0lLb1RPd1lSbVVlZkVDWG93ZmhYaVpHT3ZJK2xFU1B3VXh1Ky9Ybmt3aW4rTmxRN0xuUjhXVTNydjZLREk0d25wSUk4alIwTkFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMzk0NTA0CWZpbGU6Q3J5cHRvIEJyb3NfMC41LjBfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuNS4wCk5HMnVtZ2Rvdy9ZN0dTZ09jQVVmdmhVd0EvdEtTcDVjTlZuTDhjZ1VNNndkS3NvS2NoUUpXL2xvNURYMFg1NmRKeUVLNjhzM2JiNGw1ZDM1QThENUJBPT0K",
-      "url": "https://github.com/Rayato159/crypto-bros/releases/download/v0.5.0/Crypto.Bros_0.5.0_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUzk3UTVoajl2UFFFNWFZMW1XcDhIT1phTkVRNTZoNmZiUDltRE1IOWJ3UTlCTnh5Q0RQczJHQlh5WnZJN1FvQVExekwxaE93R3kzRWxVUkhWemtlU2FZZkM1a3FqNlFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMzk2OTM5CWZpbGU6Q3J5cHRvIEJyb3NfMC41LjFfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuNS4xCmNhZGJwMEF2ekpGN3BLdVZ2T0dhcHdmN2t2Z3hVTWZlTUV0dDlDWE9uZWJoT3J4eHJaM2hoZk5XdUF4cVVSR2RuTnlHUW9jcGF4eWlMZ2VRekl0MEJRPT0K",
+      "url": "https://github.com/Rayato159/crypto-bros/releases/download/v0.5.1/Crypto.Bros_0.5.1_x64_en-US.msi"
     }
   }
 }

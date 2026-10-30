@@ -1,0 +1,11 @@
+{
+  "name": "crypto-bros-build",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "desktop": "node scripts/prepare.mjs && tauri dev",
+    "build": "cargo test --locked && tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": { "@tauri-apps/cli": "^2.12.0" }
+}

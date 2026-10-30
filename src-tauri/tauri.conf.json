@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Crypto Bros",
+  "version": "0.1.0",
+  "identifier": "dev.cryptobros.workstation",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "node scripts/prepare.mjs"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{ "title": "Crypto Bros", "width": 1440, "height": 940, "minWidth": 1050, "minHeight": 720, "backgroundColor": "#10120f" }],
+    "security": { "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
+    "icon": ["icons/icon.ico"],
+    "resources": {"binaries/crypto-bros.exe": "crypto-bros.exe"},
+    "shortDescription": "Local SOL/USDC paper trading workstation",
+    "category": "Finance",
+    "windows": { "nsis": { "installMode": "currentUser", "displayLanguageSelector": false }, "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true } }
+  },
+  "plugins": { "updater": { "pubkey": "", "endpoints": [], "requireSignedVersion": true } }
+}

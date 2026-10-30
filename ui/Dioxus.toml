@@ -1,0 +1,9 @@
+[application]
+name = "crypto-bros-ui"
+default_platform = "web"
+
+[web.app]
+title = "Crypto Bros"
+
+[web.watcher]
+reload_html = true

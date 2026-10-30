@@ -22,12 +22,22 @@ impl Drop for Harness {
 }
 impl Harness {
     async fn new() -> Self {
+        Self::with_blocked_backup(false).await
+    }
+    async fn with_blocked_backup(blocked: bool) -> Self {
         let dir = tempfile::tempdir().expect("isolated directory");
         let store = Store::open(&dir.path().join("test.sqlite")).expect("store");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener");
         let port = listener.local_addr().expect("address").port();
+        let backup_dir = if blocked {
+            let p = dir.path().join("not-a-directory");
+            std::fs::write(&p, b"isolated backup failure fixture").unwrap();
+            p
+        } else {
+            dir.path().into()
+        };
         let state = AppState {
             engine: Arc::new(Mutex::new(Engine {
                 snapshot: Snapshot::new().expect("state"),
@@ -38,7 +48,7 @@ impl Harness {
             token: "isolated-test-token-not-a-wallet-secret".into(),
             client: reqwest::Client::new(),
             shutdown: Arc::new(Notify::new()),
-            data_dir: dir.path().into(),
+            data_dir: backup_dir,
             port,
             live_guard: Arc::new(Mutex::new(())),
         };
@@ -473,4 +483,19 @@ fn private_directory_can_be_created_and_reopened_without_admin_privileges() {
         std::fs::read(path.join("test.txt")).expect("owner can read"),
         b"test only"
     );
+}
+
+#[tokio::test]
+async fn failed_update_backup_keeps_worker_quiesced_and_blocks_resume() {
+    let h = Harness::with_blocked_backup(true).await;
+    h.ok("demo", json!({})).await;
+    let (status, _) = h.command("prepare_update", json!({})).await;
+    assert_eq!(status, 400);
+    let e = h.state.engine.lock().await;
+    assert!(e.snapshot.updating);
+    assert!(!e.snapshot.running);
+    assert!(!e.snapshot.live_enabled);
+    assert!(!e.snapshot.watch.enabled);
+    drop(e);
+    assert_eq!(h.command("start", json!({})).await.0, 400);
 }

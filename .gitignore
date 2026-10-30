@@ -2,6 +2,7 @@
 **/target/
 /dist/
 /artifacts/
+/.publisher/
 /node_modules/
 .env
 .env.*

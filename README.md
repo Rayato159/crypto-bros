@@ -2,7 +2,7 @@
 
 Rust desktop workstation for SOL/USDC research, paper trading and **individually approved real trades**. Dioxus Web runs inside Tauri; the Rust worker keeps running independently of the window. SQLite keeps separate paper and real ledgers, models and feedback locally.
 
-**0.3.0 adds a one-button trade watch, Windows notifications and a larger Thai live-account interface.** Every real Jupiter swap still requires your Phantom signature. Paper mode remains the default; real funding and limits must be configured explicitly. A +5% weekly return is a goal, not a guaranteed return or a reason to relax risk limits. Building and testing this app does not establish profitability or prove a user's mainnet execution.
+**0.4.0 adds a signed update channel, SOL gas-wallet valuation, fee details, live decision indicators and interactive candle tooltips.** Every real Jupiter swap still requires your Phantom signature. Paper mode remains the default; real funding and limits must be configured explicitly. Targets follow each layer and estimated costs. There is no mandatory daily or weekly return and no pressure to enter a trade while the computer is running. Building and testing this app does not establish profitability or prove a user's mainnet execution.
 
 ## เฝ้าตลาดแบบไม่ต้องไล่กดหลายปุ่ม
 
@@ -111,3 +111,17 @@ CLI worker: `crypto-bros.exe serve`, `status`, `start`, `pause`, `stop`. Optiona
 The portable Node preparation command builds the worker and web frontend; Tauri/WiX produces the MSI in `target/release/bundle/msi/`. Node also bundles the local Phantom approval script, so `npm ci` is required before compiling the worker. The approval page does not load a remote CDN script. Windows-specific local scripts are excluded from this repository. Desktop packaging on other platforms has not been verified.
 
 Signed in-app update infrastructure is implemented but unconfigured in this preview. It still needs an HTTPS update manifest and publisher-controlled signing key. See [release instructions](docs/RELEASING.md) and [verification log](docs/DEV_LOG.md).
+
+
+## รุ่น 0.4.0: ยอด SOL, เหตุผลการเทรด และอัปเดต
+
+- **SOL ทั้งหมด** แสดง native SOL บนเชน ส่วน **SOL จ่ายค่าธรรมเนียม** หักเฉพาะ SOL ที่อยู่ในไม้เทรดออกเพื่อไม่ปนทุนกัน เงินเติมส่วนนี้ไม่เพิ่มงบซื้อและไม่ถูกนับเป็นกำไร
+- **มูลค่ากระเป๋ารวม** รวม USDC, native SOL และ wrapped SOL ตามเรตอ้างอิง แยกจาก **มูลค่าทุนบอต** ยอดบนเชนลดค่าเครือข่ายแล้ว จึงไม่หักซ้ำอีก
+- ค่าเครือข่ายสะสมแสดง SOL และ USDC/บาทตามราคาที่บันทึก ค่าเช่าบัญชีโทเคนแยกต่างหากเพราะอาจได้คืน ค่าซื้อ/โอนภายนอกหรือรายการล้มเหลวที่บอตไม่ได้บันทึกไม่ได้ถูกรวมโดยอัตโนมัติ ค่า swap/slippage อยู่ในยอดรับจริง
+- หน้า Live trading แสดง RSI (14), MACD (12,26), Signal (9), Histogram, เวลาแท่ง และเหตุผลของคำแนะนำ ใช้แท่ง 15 นาทีที่ปิดแล้ว ตรวจตลาดประมาณทุกนาที ไม่ใช่ข้อมูลทุก tick
+- เลื่อนเมาส์เหนือแท่งราคา หรือโฟกัสด้วย Tab เพื่อดูเวลาเปิดแท่งในไทย UTC+7, OHLC, เปลี่ยนแปลงจากเปิดถึงปิด และ volume หน่วย SOL
+- ใช้เป้าของแต่ละไม้และผลสะสมสุทธิหลังค่าเครือข่าย ไม่กำหนดขั้นต่ำรายวัน/รายสัปดาห์ การปิดเครื่องไม่ปิดสถานะ SOL และแอปไม่ส่งแจ้งเตือนขณะเครื่องหลับหรือปิด
+
+ผู้ใช้รุ่น 0.3.0 หรือเก่ากว่าต้องลง MSI 0.4.0 เองหนึ่งครั้ง เพราะรุ่นเดิมไม่มี public verification key หรือช่องอัปเดต หลังจากนั้นใช้ **Settings → ตรวจอัปเดต → ดาวน์โหลด พักบอต และติดตั้ง** ได้เมื่อช่องอัปเดตมีรุ่นใหม่ ลายเซ็นครอบคลุมทั้งไฟล์และเลขรุ่น แอปตรวจลายเซ็นก่อนพักบอต สำรองข้อมูล และหยุด worker; ธุรกรรมที่เซ็นแล้วค้างจะขวางการติดตั้ง การเปิดใหม่ยังเริ่มในสถานะพัก
+
+ลายเซ็น Tauri updater แยกจาก Windows Authenticode; MSI ยังไม่มี Authenticode ข้อมูลการตรวจสอบและขอบเขตที่ยังไม่ได้ทดสอบอยู่ใน VERIFICATION.txt ของแต่ละ Release

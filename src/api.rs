@@ -103,6 +103,7 @@ async fn authorize(State(state): State<AppState>, request: Request, next: Next) 
 async fn snapshot(State(state): State<AppState>) -> Json<Value> {
     let e = state.engine.lock().await;
     let mut value = json!(&e.snapshot);
+    value["wallet_readout"] = crate::readout::view(&e.snapshot, chrono::Utc::now().timestamp());
     value["real_advice"] = crate::live_api::advice(&e.snapshot);
     value["trade_watch"] = crate::watch::view(&e.snapshot, chrono::Utc::now().timestamp());
     Json(value)

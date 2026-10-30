@@ -16,7 +16,8 @@ use tauri::{
 };
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_updater::UpdaterExt;
+mod update_flow;
+mod updates;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ConnectionInfo {
@@ -30,6 +31,8 @@ struct Backend {
     startup_error: Option<String>,
     focus_live: AtomicBool,
     notification_status: Mutex<String>,
+    update_busy: AtomicBool,
+    update_status: Mutex<Value>,
 }
 impl Backend {
     fn connection(&self) -> Result<ConnectionInfo, String> {
@@ -235,62 +238,27 @@ async fn open_live_order(
         .map_err(|_| "Could not open the approval page in a browser".into())
 }
 #[tauri::command]
-async fn check_update(app: tauri::AppHandle) -> Result<Value, String> {
-    let configured = app
-        .config()
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|v| v.get("endpoints"))
-        .and_then(Value::as_array)
-        .is_some_and(|v| !v.is_empty());
-    if !configured {
-        return Ok(
-            json!({"configured":false,"message":"This local preview is not connected to a published update channel. Signed releases will enable in-app updates."}),
-        );
-    }
-    let update = app
-        .updater()
-        .map_err(|_| "Updater configuration is invalid")?
-        .check()
-        .await
-        .map_err(|_| "Could not check the signed release channel")?;
-    Ok(match update {
-        Some(u) => json!({"configured":true,"available":true,"version":u.version,"notes":u.body}),
-        None => json!({"configured":true,"available":false}),
-    })
+async fn check_update(
+    app: tauri::AppHandle,
+    backend: tauri::State<'_, Backend>,
+) -> Result<Value, String> {
+    updates::check(&app, &backend).await
 }
 #[tauri::command]
 async fn install_update(
     app: tauri::AppHandle,
     backend: tauri::State<'_, Backend>,
+    expected_version: String,
 ) -> Result<(), String> {
-    // Resolve release availability before interrupting the running worker.
-    let update = app
-        .updater()
-        .map_err(|_| "Updater not configured")?
-        .check()
-        .await
-        .map_err(|_| "Could not check updates")?
-        .ok_or("No update is available")?;
-    let bytes = update
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|_| "Update download or signature verification failed")?;
-    backend.command("prepare_update", json!({})).await?;
-    backend.command("shutdown", json!({})).await?;
-    for _ in 0..50 {
-        if !backend.data_dir.join("connection.json").exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    if backend.data_dir.join("connection.json").exists() {
-        return Err("Worker has not stopped; installation was cancelled".into());
-    }
-    update
-        .install(bytes)
-        .map_err(|_| "Installer failed; your portfolio backup was preserved".into())
+    updates::install(&app, &backend, &expected_version).await
+}
+#[tauri::command]
+fn update_status(backend: tauri::State<'_, Backend>) -> Value {
+    updates::status(&backend)
+}
+#[tauri::command]
+fn open_releases(app: tauri::AppHandle) -> Result<(), String> {
+    updates::open_release(&app)
 }
 fn data_dir() -> Result<PathBuf, String> {
     let args: Vec<_> = std::env::args().collect();
@@ -391,6 +359,8 @@ fn main() {
                     .build()?,
                 data_dir: dir.clone(),
                 startup_error: None,
+                update_busy: AtomicBool::new(false),
+                update_status: Mutex::new(json!({"phase":"idle","message":"พร้อมตรวจอัปเดต"})),
                 focus_live: AtomicBool::new(false),
                 notification_status: Mutex::new("กดทดสอบแจ้งเตือนก่อนซ่อนแอปไว้ในถาดระบบ".into()),
             };
@@ -470,7 +440,9 @@ fn main() {
             review_watch_order,
             test_notification,
             check_update,
-            install_update
+            install_update,
+            update_status,
+            open_releases
         ])
         .build(tauri::generate_context!());
     match app {

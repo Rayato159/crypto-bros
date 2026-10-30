@@ -326,3 +326,36 @@ async fn stale_notification_after_stop_is_rejected_before_quote_access() {
     assert!(!e.snapshot.live_enabled);
     assert!(e.snapshot.real.as_ref().unwrap().pending.is_none());
 }
+
+#[test]
+fn external_gas_deposits_change_wallet_value_but_never_bot_profit_or_limits() {
+    let mut s = fixture();
+    let now = chrono::Utc::now().timestamp();
+    let before = crypto_bros::live_api::advice(&s)["bot_pnl_usdc"].clone();
+    let initial = crypto_bros::readout::view(&s, now);
+    s.real_balances.as_mut().unwrap().sol += SOL;
+    let after = crypto_bros::readout::view(&s, now);
+    assert_eq!(
+        after["wallet_usdc"].as_u64().unwrap() - initial["wallet_usdc"].as_u64().unwrap(),
+        100 * USDC
+    );
+    assert_eq!(crypto_bros::live_api::advice(&s)["bot_pnl_usdc"], before);
+    assert_eq!(s.real.as_ref().unwrap().config.trading_budget, 60 * USDC);
+}
+#[test]
+fn wallet_value_does_not_subtract_recorded_fees_twice_and_stale_marks_are_unavailable() {
+    let mut s = fixture();
+    let now = chrono::Utc::now().timestamp();
+    s.real.as_mut().unwrap().fees_usdc = USDC;
+    let b = s.real_balances.as_mut().unwrap();
+    b.usdc = 100 * USDC;
+    b.sol = SOL;
+    let view = crypto_bros::readout::view(&s, now);
+    assert_eq!(view["wallet_usdc"], 200 * USDC);
+    assert_eq!(view["network_fee_usdc"], USDC);
+    s.updated_at = now - 300;
+    let view = crypto_bros::readout::view(&s, now);
+    assert!(view["wallet_usdc"].is_null());
+    assert_eq!(view["fresh"], false);
+    assert_eq!(view["native_sol"], SOL);
+}

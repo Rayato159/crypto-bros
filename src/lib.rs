@@ -13,3 +13,5 @@ pub fn data_directory() -> Result<std::path::PathBuf, String> {
         .map(|dirs| dirs.data_local_dir().to_path_buf())
         .ok_or_else(|| "Cannot locate application data directory".into())
 }
+
+pub mod readout;

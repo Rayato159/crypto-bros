@@ -1,6 +1,6 @@
 [package]
 name = "crypto-bros"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "SOL/USDC research workstation with Phantom-approved trading"
 license = "MIT"
@@ -30,6 +30,7 @@ ed25519-dalek = "2"
 
 [dev-dependencies]
 tempfile = "3"
+minisign-verify = "0.3"
 
 [profile.release]
 lto = "thin"

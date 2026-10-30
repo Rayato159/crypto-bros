@@ -1,3 +1,6 @@
+mod chart;
+mod live_details;
+mod updates_ui;
 use dioxus::prelude::*;
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
@@ -177,7 +180,7 @@ fn app() -> Element {
         div {class:"shell",
             aside {class:"sidebar",div {class:"brand",div {class:"brand-mark","C↗"}div {class:"brand-name",div {"CRYPTO"}div {"BROS"}}}div {class:"workspace-label","PERSONAL TRADING LAB"}
                 nav {for (index,name) in ["Overview","Live trading","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
-                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.3.0 · MANUAL APPROVAL"}}
+                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.4.0 · MANUAL APPROVAL"}}
             }
             main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge",if tab()=="Live trading"{"REAL MONEY · PHANTOM"}else if tab()=="Overview"||tab()=="Layers"{"PAPER TRADING"}else{"RESEARCH / ACCOUNT TOOLS"}}}}
                 div {class:"content",
@@ -185,7 +188,7 @@ fn app() -> Element {
                     if data["market_error"].is_string(){div {class:"warning","{s(&data[\"market_error\"])}"}}
                     match tab().as_str(){"Live trading"=>rsx!{LiveTrading{}},"Layers"=>rsx!{Layers{}},"Research"=>rsx!{Research{}},"Decisions"=>rsx!{Decisions{}},"Wallet"=>rsx!{Wallet{}},"Settings"=>rsx!{Settings{}},_=>rsx!{Overview{}}}
                     div {class:"notice",span {class:"notice-label",if busy(){"WORKING"}else{"ACTIVITY"}}span {"{notice()}"}}
-                    footer {span {"LOCAL FIRST / SOLANA"}span {"Paper fills ≠ on-chain executions. Weekly target is a goal, never a guarantee."}}
+                    footer {span {"LOCAL FIRST / SOLANA"}span {"เป้ากำไรต่อไม้ตามสภาพตลาด · ไม่มีขั้นต่ำรายวัน · ทุกคำสั่งจริงยืนยันใน Phantom"}}
                 }
             }
         }
@@ -210,13 +213,12 @@ fn Overview() -> Element {
         .filter(|l| n(&l["quantity"]) > 0.0)
         .count();
     let indicators = &data["indicators"];
-    let chart = price_chart(&data["candles"]);
     rsx! {
         div {class:"page-heading",div {div {class:"eyebrow","THE LONG GAME"}h1 {"A clear view."}p {"Observe the market. Test the edge. Protect the reserve."}}div {class:"actions",Action {label:"↻ Refresh market",action:"refresh"}Action {label:if running{"Pause engine"}else{"Start paper engine"},action:if running{"pause"}else{"start"},kind:"primary"}}}
         div {class:"metrics",Metric {label:"PAPER EQUITY",value:format!("{} USDC",money(equity)),detail:format!("{} total return · includes open positions",pct(n(&data["net_return"]))),accent:true}Metric {label:"PROTECTED RESERVE",value:money(if data.is_null(){400.0}else{reserve}),detail:"USDC · excluded from trading budget"}Metric {label:"AVAILABLE TO DEPLOY",value:money((cash-reserve-parked).max(0.0)),detail:format!("{open} / 4 layers active")}Metric {label:"DRAWDOWN",value:format!("{:.2}%",n(&data["drawdown"])*100.0),detail:"From paper equity high-water mark"}}
         div {class:"overview-grid",
             section {class:"panel chart-panel",div {class:"panel-heading",div {span {class:"pair-icon","◎"}strong {"SOL / USDC"}span {class:"muted","15m · closed candles"}}div {class:"chart-price",if n(&data["price"])>0.0{"{money(n(&data[\"price\"]))}"}else{"—"}}}
-                div {class:"chart",dangerous_inner_html:chart}
+                div {class:"chart",chart::CandleChart{candles:data["candles"].clone()}}
                 div {class:"indicator-row",div {span {"RSI · 14"}strong {"{n(&indicators[\"rsi\"]):.1}"}}div {span {"MACD HISTOGRAM"}strong {"{n(&indicators[\"histogram\"]):.4}"}}div {span {"ATR · 14"}strong {"{n(&indicators[\"atr\"]):.3}"}}}
                 div {class:"panel-note","Chart source and swap quote are different markets. Paper fills include simulated fees and slippage."}
             }
@@ -231,7 +233,7 @@ fn Overview() -> Element {
                 div {class:"actions",Action {label:"สร้าง / ทดสอบสูตรใหม่",action:"research"}Action {label:"Open paper layer",action:"buy"}}
             }
             section {class:"panel",div {class:"panel-heading",h3 {"System watch"}span {class:"chip","LOCAL ENGINE"}}
-                div {class:"watch-row",span {"Real-money orders"}strong {"SEPARATE LIVE TAB"}}div {class:"watch-row",span {"Email risk alerts"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}div {class:"watch-row",span {"Weekly target"}strong {"+5% / aspirational"}}
+                div {class:"watch-row",span {"Real-money orders"}strong {"SEPARATE LIVE TAB"}}div {class:"watch-row",span {"Email risk alerts"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}div {class:"watch-row",span {"เป้าหมาย"}strong {"สุทธิต่อไม้ / ไม่บังคับรายวัน"}}
                 for alert in items(&data["alerts"]).into_iter().filter(|a|a["acknowledged"]!=true){div {class:"warning small","{s(&alert[\"message\"])}"}}
                 Action {label:"Acknowledge risk review",action:"acknowledge"}
             }
@@ -429,6 +431,7 @@ fn LiveTrading() -> Element {
             }
         }else{
             TradeWatch{}
+            live_details::LiveDetails{}
             div {class:"metrics",Metric {label:"มูลค่าทุนบอต · USDC",value:metric("equity_usdc",1e6,""),detail:"USDC ในบัญชีบอต + มูลค่า SOL ที่บอตซื้อไว้",accent:true}Metric {label:"ทุนบอตคิดเป็นเงินบาท",value:metric("equity_satang",100.0,"฿"),detail:"คำนวณตามเรตอ้างอิง ยังไม่ใช่ยอดถอนเข้าธนาคาร"}Metric {label:"ผลกำไร / ขาดทุนจากบอต · USDC",value:metric("bot_pnl_usdc",1e6,""),detail:"ตั้งแต่เริ่มใช้บอต หลังหักค่าเครือข่ายที่บันทึกแล้ว"}Metric {label:"ผลเทียบเงินต้นเดิม · บาท",value:metric("historical_pnl_satang",100.0,"฿"),detail:"รวมผลราคาและเรตเงินตั้งแต่ก่อนเริ่มใช้บอต"}}
             section {class:"panel spaced",div {class:"panel-heading",h2 {"ทุน เงินสำรอง และค่าเงินบาท"}span {class:"chip",if data["live_enabled"]==true{"เปิดเสนอซื้อ · มึงเซ็นทุกไม้"}else{"พักการซื้อเพิ่ม"}}}
                 div {class:"watch-row",span {"เงินต้นเดิมที่แบ่งให้บอต (บาท)"}strong {"฿{money(n(&account[\"initial_cost_satang\"])/100.0)}"}}
@@ -446,7 +449,7 @@ fn LiveTrading() -> Element {
                 details {class:"advanced-tools",summary {"เครื่องมือขั้นสูง: ดูสูตร หรือเตรียมคำสั่งเอง"}
                 section {class:"panel spaced",div {class:"panel-heading",h2 {"Next move: {s(&advice[\"action\"])}"}span {class:"chip","ADVICE ≠ AN EXECUTED ORDER"}}p {"{s(&advice[\"reason\"])}"}
                     div {class:"actions",Action {label:"เปิดให้เสนอซื้อเพิ่ม",action:"enable_live"}Action {label:"สร้าง / ทดสอบสูตรใหม่",action:"research"}Action {label:"ใช้สูตรที่ทดสอบล่าสุด",action:"live_use_model"}}
-                    p {class:"muted small","An explicitly selected research model uses RSI, MACD and other features. Optimization cannot change your reserve or trade limits. A 5% weekly return is a target, not a promise."}
+                    p {class:"muted small","An explicitly selected research model uses RSI, MACD and other features. Optimization cannot change your reserve or trade limits. Targets follow each layer and estimated costs; there is no forced daily or weekly return."}
                     LiveField {label:"เงินที่ใช้ซื้อครั้งนี้ · USDC",value:amount}
                     div {class:"actions",Action {label:"เตรียมซื้อเมื่อผ่านโมเดล",action:"live_prepare",kind:"primary",payload:json!({"side":"buy","amount_usdc":amount()})}Action {label:"ซื้อเองด้วยเงินจริง (ข้ามโมเดล)",action:"live_prepare",payload:json!({"side":"buy","amount_usdc":amount(),"manual":true})}}
                     p {class:"muted small","ปุ่มซื้อเองใช้เงินจริงและข้ามเฉพาะสัญญาณโมเดล ยังตรวจวงเงินและความเสี่ยง กดเตรียมแล้วยังต้องเซ็นใน Phantom"}
@@ -482,18 +485,12 @@ fn LiveTrading() -> Element {
 }
 #[component]
 fn Settings() -> Element {
-    let mut ctx = use_context::<Context>();
+    let ctx = use_context::<Context>();
     let data = (ctx.state)();
-    let mut update = use_signal(|| Value::Null);
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.3.0 · manually approved trading"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.4.0 · manually approved trading"}}}
         div {class:"bottom-grid",
-            section {class:"panel",h2 {"Application updates"}p {"Signed releases update the app while preserving your portfolio. The engine pauses and the database is backed up first."}
-                button {class:"button primary",onclick:move |_|{spawn(async move {match invoke("check_update",json!({})).await{Ok(v)=>{ctx.notice.set(s(&v["message"]).to_string());update.set(v);},Err(e)=>ctx.notice.set(e)}});},"Check for updates"}
-                if update()["available"]==true{p {"New version: {s(&update()[\"version\"])}"}button {class:"button secondary",onclick:move |_|{spawn(async move {match invoke("install_update",json!({})).await{Ok(_)=>ctx.notice.set("Installing verified update…".into()),Err(e)=>ctx.notice.set(e)}});},"Pause and install update"}}
-                if !update().is_null() && update()["configured"]==false{p {class:"muted small","No published update channel for this local preview. A release owner must configure its public verification key and release URL."}}
-                if update()["configured"]==true && update()["available"]==false{p {"You are up to date."}}
-            }
+            updates_ui::Updates{}
             section {class:"panel",h2 {"Connections"}div {class:"watch-row",span {"Jupiter API key"}strong {if data["jupiter_key_configured"]==true{"CONFIGURED"}else{"KEYLESS QUOTES"}}}div {class:"watch-row",span {"Email notifications"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}
                 p {class:"muted small","Configure optional service credentials privately in the application data folder using the .env.example guide, then restart the engine. Secrets are never displayed here."}
                 div {class:"divider"}div {class:"watch-row",span {"Wallet seed / key storage"}strong {"NOT SUPPORTED"}}div {class:"watch-row",span {"Real transaction signing"}strong {"YOU APPROVE IN PHANTOM"}}
@@ -501,40 +498,4 @@ fn Settings() -> Element {
         }
         section {class:"panel spaced",h3 {"Background behavior"}p {"Closing the window keeps the paper engine running in the tray. Choose “Stop bot and quit” from the tray to stop it. A sleeping or offline computer cannot monitor the market or deliver alerts."}p {class:"muted small","Every service restart starts paused. Layers, history, research and feedback remain in the local database."}}
     }
-}
-fn price_chart(value: &Value) -> String {
-    let all = items(value);
-    let candles: Vec<_> = all.iter().rev().take(80).rev().collect();
-    if candles.is_empty() {
-        return "<div class='chart-empty'><span class='chart-empty-icon'>↗</span><h3>The market, in context.</h3><p>Refresh SOL/USDC candles, or load the synthetic demo below.</p></div>".into();
-    }
-    let low = candles
-        .iter()
-        .map(|c| n(&c["low"]))
-        .fold(f64::INFINITY, f64::min);
-    let high = candles
-        .iter()
-        .map(|c| n(&c["high"]))
-        .fold(f64::NEG_INFINITY, f64::max);
-    let range = (high - low).max(0.01);
-    let y = |p: f64| 270.0 - (p - low) / range * 230.0;
-    let mut svg =
-        String::from("<svg viewBox='0 0 960 310' role='img' aria-label='SOL USDC candle chart'>");
-    for i in 0..5 {
-        let py = 40.0 + i as f64 * 57.5;
-        let price = high - i as f64 * range / 4.0;
-        svg.push_str(&format!("<line x1='10' y1='{py}' x2='875' y2='{py}' stroke='#2a2f25' stroke-dasharray='3 5'/><text x='892' y='{}' fill='#89937e' font-family='monospace' font-size='12'>{price:.2}</text>",py+4.0));
-    }
-    let step = 850.0 / candles.len() as f64;
-    for (i, c) in candles.iter().enumerate() {
-        let x = 14.0 + i as f64 * step;
-        let open = n(&c["open"]);
-        let close = n(&c["close"]);
-        let color = if close >= open { "#b8e787" } else { "#c77c66" };
-        let top = y(open.max(close));
-        let height = (y(open.min(close)) - top).max(1.5);
-        svg.push_str(&format!("<line x1='{x}' y1='{}' x2='{x}' y2='{}' stroke='{color}'/><rect x='{}' y='{top}' width='{}' height='{height}' fill='{color}' rx='1'/>",y(n(&c["high"])),y(n(&c["low"])),x-step*0.26,step*0.52));
-    }
-    svg.push_str("<text x='14' y='302' fill='#6f7965' font-family='monospace' font-size='11'>COMPLETED 15-MINUTE CANDLES</text></svg>");
-    svg
 }

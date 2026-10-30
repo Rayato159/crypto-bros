@@ -10,7 +10,7 @@ body{font-family:"Segoe UI",Tahoma,system-ui,sans-serif;font-size:16px;line-heig
 .live-field,.live-field input,.live-form-grid label,.live-form-grid input{font-size:16px;line-height:1.6}
 .nav-item{font-size:16px}.source-tag,.paper-badge,.chip,.status-line,.version{font-size:12px;letter-spacing:.025em}
 table{font-size:16px}th{font-size:13px;letter-spacing:.025em}td{font-size:16px}
-.panel h2{font-size:26px}.panel h3{font-size:22px}.panel p{line-height:1.7}
+.panel h2{font-size:26px}.panel h3{font-size:22px}.panel p{font-size:16px;line-height:1.7}.warning{font-size:16px}.demo-banner{font-size:14px}
 .trade-watch{border:1px solid #6a8745}.watch-copy{max-width:76ch;font-size:17px}
 .watch-signals{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr));gap:18px;margin:22px 0}
 .signal-card{background:#222d1b;border:1px solid #789c47;border-radius:12px;padding:24px}
@@ -26,3 +26,9 @@ table{font-size:16px}th{font-size:13px;letter-spacing:.025em}td{font-size:16px}
 .notice-label{font-size:12px;margin-right:12px}.content{padding-bottom:140px}.button:disabled{opacity:.65;cursor:wait}
 @media(max-width:1150px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.watch-row{flex-wrap:wrap}.watch-row span{max-width:100%}}
 @media(max-width:720px){.metrics{grid-template-columns:1fr}.watch-row strong{text-align:left}.metric-value{font-size:32px}}
+.wallet-metrics{grid-template-columns:repeat(3,minmax(0,1fr));margin:20px 0}.indicator-metrics{margin:20px 0}.indicator-metrics .metric-value{font-size:28px}
+.candle-chart{position:relative}.candle-hit{cursor:crosshair;outline:none}.candle-hit:hover,.candle-hit:focus{fill:#b8e78718;stroke:#b8e78755;stroke-width:1}
+.candle-tooltip{position:absolute;right:20px;top:12px;z-index:4;width:300px;max-width:85%;background:#10180ff5;border:1px solid #91ad70;padding:16px 20px;border-radius:10px;box-shadow:0 6px 25px #0008;pointer-events:none;font-size:16px;line-height:1.4}
+.candle-tooltip.left{left:20px;right:auto}.candle-tooltip p{margin:6px 0}.candle-tooltip dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:12px 0 0}.candle-tooltip dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+.update-message{font-size:17px}.panel progress{width:100%;accent-color:#b8e787}
+@media(max-width:1150px){.wallet-metrics{grid-template-columns:1fr}.indicator-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}

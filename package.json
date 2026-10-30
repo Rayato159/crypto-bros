@@ -1,12 +1,13 @@
 {
   "name": "crypto-bros-build",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "scripts": {
     "test:wallet": "node --test scripts/test-wallet.mjs",
     "desktop": "node scripts/prepare.mjs && tauri dev",
     "build": "cargo test --locked && tauri build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:signed": "node scripts/signed-build.mjs"
   },
   "devDependencies": {
     "@solana/web3.js": "3.1.1",

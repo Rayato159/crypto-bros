@@ -27,3 +27,11 @@ Created the public `Rayato159/crypto-bros` repository at the user's request. Exc
 Rebuilt the preview through `npm run build`: all 19 local tests passed, the Dioxus frontend bundled, and Tauri generated the NSIS installer. Rust formatting passed. No trading behavior changed. The worker hash is unchanged. The packaged GUI was rebuilt to reflect the preparation-command configuration. Publication is tracked by the GitHub release and CI status; a public installer does not enable signed in-app updates.
 
 The rebuilt installer exited successfully, and its installed worker matched the build byte-for-byte. The installed GUI matched after only Tauri's expected NSIS package marker. Windows Authenticode status remains unsigned.
+
+## 2026-10-30 — v0.1.0 published and independently downloaded
+
+Published [v0.1.0 Research Preview](https://github.com/Rayato159/crypto-bros/releases/tag/v0.1.0) from `c5ab3fb6aee6f097d2c6063051d488e8dd039179` after uploading and checking a draft. The [main check](https://github.com/Rayato159/crypto-bros/actions/runs/41090350766) and [tag check](https://github.com/Rayato159/crypto-bros/actions/runs/41090455503) both passed Rust formatting, worker/core tests and the WASM build check on Ubuntu.
+
+All three public assets were downloaded without authentication and matched local sizes and SHA-256 values. The published checksum manifest also verified both named files. GitHub normalizes spaces in asset names, so the manifest uses `Crypto.Bros_0.1.0_x64-setup.exe` (5,990,381 bytes; SHA-256 `d598e5e8577441f9ffa6712b081e3fb22e90594e3d7b997115182632c0445ba7`). The other assets are `VERIFICATION.txt` and `SHA256SUMS.txt`.
+
+An anonymous inspection of the 92-file release source tree confirmed the excluded Windows helpers were absent. The release remains paper-only and unsigned; there is no configured in-app update channel. This documentation entry does not change the tagged source or installer.

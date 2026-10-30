@@ -1,0 +1,11 @@
+{
+  "version": "0.4.0",
+  "notes": "SOL gas valuation and recorded fees; RSI/MACD details; candle tooltips; per-layer goals and signed updates. All real orders still require Phantom approval.",
+  "pub_date": "2026-10-30T20:02:07Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUzk3UTVoajl2UFhlbkxVZDhUbmo4ZjBVbTNlZWlzOEMxaHVvWGVKRktRaFAxRys1QjBMN1Z6QURiVUV3KzBxRzFuRWNDLzIyb0p3ak53ZVhjTW5RaTN2SmgxMkMyWHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMzkwODE0CWZpbGU6Q3J5cHRvIEJyb3NfMC40LjBfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuNC4wCkN2U1RkUzNYSGZuUW85UzBDYTdIQ1NRKzB0Y3ZVSUFrVzdLSTF5aU9nWmtyRXZPcmgyTDRuRnFLenZPWkhoMDZPYW5waHlkVzdLbEcrS0V3MERSZkNnPT0K",
+      "url": "https://github.com/Rayato159/crypto-bros/releases/download/v0.4.0/Crypto.Bros_0.4.0_x64_en-US.msi"
+    }
+  }
+}

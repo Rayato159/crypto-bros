@@ -108,3 +108,10 @@ The final MSI is 8,867,840 bytes, SHA-256 `578b112699fc5d3c69729f728b2da7301e6cf
 ### v0.4.0 publication and channel activation
 
 Published [v0.4.0](https://github.com/Rayato159/crypto-bros/releases/tag/v0.4.0) from `a715457348918b57728f184087d011d9ae16f574`. Anonymous downloads of all five assets (MSI, public signature, static manifest, verification record and checksums) matched local bytes exactly; the downloaded MSI passed public-key signature/version verification and tamper rejection. Only after that verification was the identical manifest added to `updates/windows.json` for channel activation. All 114 tagged source paths were checked for private-data filenames and prohibited Windows helper scripts. Post-activation desktop check and CI results follow below when verified.
+
+
+The production raw-GitHub channel was fetched anonymously and its JSON, version and signature matched the released manifest; Git normalized only CRLF to LF. The final packaged desktop's actual **Check updates** command returned the latest-version result from that channel. This validates channel access/parsing, separately from the already verified download signature; a complete in-app MSI replacement was not attempted.
+
+Stopped the isolated fixture server and packaged test instance, then removed 5,082,248,169 bytes of generated builds and disposable test files after validating absolute workspace paths and rejecting reparse points. Rechecked the preserved MSI hash and publisher-key existence without reading key contents. Release artifacts and screenshots remain under `artifacts/v0.4.0`; source, private publisher material and installed user data were preserved.
+
+Both source CI runs completed successfully: [v0.4.0 tag](https://github.com/Rayato159/crypto-bros/actions/runs/41120967751) and [main](https://github.com/Rayato159/crypto-bros/actions/runs/41120966804), at the exact released commit. This documentation follow-up does not change the tagged installer.

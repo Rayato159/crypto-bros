@@ -11,14 +11,35 @@ pub const REMINDER_SECONDS: i64 = 15 * 60;
 
 pub fn profit_exit_covers_costs(
     layer: &crate::live::RealLayer,
+    quantity: u64,
     minimum_usdc: u64,
     fee_sol: u64,
     price: u64,
+    rate: &crate::live::ThbRate,
 ) -> bool {
+    if quantity == 0 || quantity > layer.tradable_quantity() {
+        return false;
+    }
     let Ok(fee) = crate::live::ratio(fee_sol, price, SOL) else {
         return false;
     };
-    minimum_usdc.saturating_sub(fee) > layer.cost_usdc.saturating_add(layer.entry_fee_usdc)
+    let net = minimum_usdc.saturating_sub(fee);
+    let (Ok(cost), Ok(cost_thb), Ok(net_thb)) = (
+        crate::live::ratio(
+            layer.cost_usdc.saturating_add(layer.entry_fee_usdc),
+            quantity,
+            layer.quantity,
+        ),
+        crate::live::ratio(
+            layer.cost_satang.saturating_add(layer.entry_fee_satang),
+            quantity,
+            layer.quantity,
+        ),
+        rate.satang(net),
+    ) else {
+        return false;
+    };
+    net > cost && net_thb > cost_thb
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -30,7 +51,11 @@ pub struct Watch {
 }
 
 pub fn buy_size(a: &RealAccount) -> u64 {
-    let open = a.layers.iter().filter(|l| l.quantity > 0).count();
+    let open = a
+        .layers
+        .iter()
+        .filter(|l| l.tradable_quantity() > 0)
+        .count();
     let slots = a.config.max_layers.saturating_sub(open);
     if slots == 0 {
         return 0;
@@ -40,11 +65,13 @@ pub fn buy_size(a: &RealAccount) -> u64 {
         .iter()
         .fold(0_u64, |sum, l| sum.saturating_add(l.cost_usdc));
     let remaining = a.config.trading_budget.saturating_sub(exposure);
-    a.cash
+    let bounded = a
+        .cash
         .saturating_sub(a.config.reserve)
         .saturating_sub(a.parked_profit)
         .min(a.config.max_buy)
-        .min(remaining / slots as u64)
+        .min(remaining / slots as u64);
+    a.advice_policy.buy_size(bounded)
 }
 
 fn status(s: &Snapshot, state: &str, message: &str) -> Value {
@@ -95,21 +122,41 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
     let global_risk = advice["risk_blocked"] == true;
     let mut signals = Vec::new();
     // Risk exits precede profit exits, including when new buys are paused.
-    for l in a.layers.iter().filter(|l| l.quantity > 0) {
+    for l in a.layers.iter().filter(|l| l.tradable_quantity() > 0) {
         let risk = global_risk || price <= l.review_price;
         if !risk && price < l.target_price {
             continue;
         }
         let reason = if risk { "risk" } else { "target" };
-        let key = format!("sell:{reason}:{}:{}", l.id, l.quantity);
-        let value = crate::live::ratio(l.quantity, price, SOL).unwrap_or(0);
-        let pnl = value as i128 - l.cost_usdc as i128 - l.entry_fee_usdc as i128;
+        let quantity = if risk || a.advice_eligibility().is_err() {
+            l.tradable_quantity()
+        } else {
+            a.advice_policy.sell_size(l.tradable_quantity())
+        };
+        if quantity == 0 {
+            continue;
+        }
+        let key = format!("sell:{reason}:{}:{quantity}", l.id);
+        let value = crate::live::ratio(quantity, price, SOL).unwrap_or(0);
+        let basis = crate::live::ratio(
+            l.cost_usdc.saturating_add(l.entry_fee_usdc),
+            quantity,
+            l.quantity,
+        )
+        .unwrap_or(u64::MAX);
+        let basis_thb = crate::live::ratio(
+            l.cost_satang.saturating_add(l.entry_fee_satang),
+            quantity,
+            l.quantity,
+        )
+        .unwrap_or(u64::MAX);
+        let pnl = value as i128 - basis as i128;
         let value_thb = rate.satang(value).unwrap_or(0);
-        let pnl_thb = value_thb as i128 - l.cost_satang as i128 - l.entry_fee_satang as i128;
+        let pnl_thb = value_thb as i128 - basis_thb as i128;
         signals.push(json!({"key":key,"side":"sell","risk":risk,"layer_id":l.id,
             "title":if risk {format!("ทบทวนขายไม้ #{} เพื่อลดความเสี่ยง",l.id)} else {format!("ไม้ #{} ถึงราคาเป้าหมายแล้ว",l.id)},
             "reason":if risk {"ถึงเกณฑ์ทบทวนความเสี่ยงของไม้หรือเงินทุน หยุดซื้อเพิ่มและตรวจรายการขาย"} else {"ราคาตลาดถึงเป้าหมายขายที่บันทึกไว้ตอนเข้าไม้"},
-            "quantity_sol":l.quantity,"amount_usdc":value,"value_satang":value_thb,
+            "quantity_sol":quantity,"amount_usdc":value,"value_satang":value_thb,
             "pnl_usdc":pnl,"pnl_satang":pnl_thb,
             "button":"ตรวจราคาขาย → Phantom","observed_at":s.updated_at,"expires_at":s.updated_at+120}));
     }
@@ -156,6 +203,8 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
         "มีรายการให้ตรวจสอบ ก่อนส่งต้องยืนยันใน Phantom"
     } else if global_risk {
         "มีเงื่อนไขความเสี่ยง หยุดซื้อเพิ่ม; รายการที่พักไว้จะแจ้งอีกครั้งเมื่อครบเวลา"
+    } else if let Err(reason) = crate::live_api::model_buy_eligibility(s) {
+        reason
     } else if !s.live_enabled {
         "ยังเฝ้าราคาขายอยู่ แต่พักการเสนอซื้อเพิ่ม"
     } else if a.advice_model.is_none() {
@@ -185,7 +234,9 @@ pub fn order_payload(s: &Snapshot, key: &str, now: i64) -> Result<Value, String>
             json!({"side":"buy","amount_usdc":format!("{}.{:06}",amount/USDC,amount%USDC),"watch_key":key}),
         )
     } else {
-        Ok(json!({"side":"sell","layer_id":signal["layer_id"],"percent":100,"watch_key":key}))
+        Ok(
+            json!({"side":"sell","layer_id":signal["layer_id"],"quantity_sol_atomic":signal["quantity_sol"],"watch_key":key}),
+        )
     }
 }
 

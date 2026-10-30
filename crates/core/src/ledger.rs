@@ -23,12 +23,22 @@ pub struct Layer {
     pub id: u64,
     pub opened_at: i64,
     pub quantity: u64,
+    #[serde(default)]
+    pub reserved_quantity: u64,
     pub remaining_cost: u64,
     pub entry_price: u64,
     pub target_price: u64,
     pub review_price: u64,
     pub realized_pnl: i64,
     pub model_version: String,
+}
+impl Layer {
+    pub fn tradable_quantity(&self) -> u64 {
+        self.quantity.saturating_sub(self.reserved_quantity)
+    }
+}
+pub fn reserved_part(amount: u64, bps: u16) -> u64 {
+    (amount as u128 * bps.min(10_000) as u128).div_ceil(10_000) as u64
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +67,8 @@ pub struct Ledger {
     pub layers: Vec<Layer>,
     pub fills: Vec<Fill>,
     pub next_layer_id: u64,
+    #[serde(default)]
+    pub reserve_bps: u16,
 }
 
 fn units(value: u128) -> Result<u64, LedgerError> {
@@ -91,6 +103,7 @@ impl Ledger {
             layers: vec![],
             fills: vec![],
             next_layer_id: 1,
+            reserve_bps: 0,
         })
     }
     pub fn available(&self) -> u64 {
@@ -99,7 +112,10 @@ impl Ledger {
             .saturating_sub(self.parked_profit)
     }
     pub fn open_count(&self) -> usize {
-        self.layers.iter().filter(|l| l.quantity > 0).count()
+        self.layers
+            .iter()
+            .filter(|l| l.tradable_quantity() > 0)
+            .count()
     }
     pub fn equity(&self, price: u64) -> Result<u64, LedgerError> {
         units(
@@ -166,6 +182,7 @@ impl Ledger {
             id,
             opened_at: time,
             quantity,
+            reserved_quantity: reserved_part(quantity, self.reserve_bps),
             remaining_cost: cost,
             entry_price: price,
             target_price: target,
@@ -192,7 +209,7 @@ impl Ledger {
             .iter_mut()
             .find(|l| l.id == id)
             .ok_or(LedgerError::Position)?;
-        if quantity == 0 || quantity > layer.quantity {
+        if quantity == 0 || quantity > layer.tradable_quantity() {
             return Err(LedgerError::Position);
         }
         let gross = units(quantity as u128 * price as u128 / SOL as u128)?;
@@ -209,9 +226,15 @@ impl Ledger {
             .cash
             .checked_add(proceeds)
             .ok_or(LedgerError::Overflow)?;
+        let reserved_proceeds = reserved_part(proceeds, self.reserve_bps);
+        let new_reserve = self
+            .reserve
+            .checked_add(reserved_proceeds)
+            .ok_or(LedgerError::Overflow)?;
+        let profit = pnl.max(0) as u64;
         let parked = self
             .parked_profit
-            .checked_add(pnl.max(0) as u64)
+            .checked_add(profit.saturating_sub(reserved_part(profit, self.reserve_bps)))
             .ok_or(LedgerError::Overflow)?;
         let fill = Fill {
             id: self.fills.len() as u64 + 1,
@@ -230,6 +253,7 @@ impl Ledger {
         layer.remaining_cost -= basis;
         layer.realized_pnl += pnl;
         self.cash = new_cash;
+        self.reserve = new_reserve;
         self.parked_profit = parked;
         self.fills.push(fill.clone());
         Ok(fill)

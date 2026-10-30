@@ -25,7 +25,7 @@ pub fn samples(candles: &[Candle], label_end: usize) -> Vec<Sample> {
         .collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForecastModel {
     pub version: String,
     pub weights: [f64; 6],
@@ -133,7 +133,7 @@ impl ForecastModel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Policy {
     pub min_edge: f64,
     pub uncertainty_weight: f64,
@@ -142,6 +142,14 @@ pub struct Policy {
     pub cooldown_bars: usize,
     pub fee_bps: u64,
     pub slippage_bps: u64,
+    /// Fractions of the bounded per-slot buy amount / tradable layer quantity.
+    #[serde(default = "full_allocation")]
+    pub buy_size_bps: u16,
+    #[serde(default = "full_allocation")]
+    pub sell_size_bps: u16,
+}
+fn full_allocation() -> u16 {
+    10_000
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -153,10 +161,18 @@ impl Default for Policy {
             cooldown_bars: 4,
             fee_bps: 20,
             slippage_bps: 10,
+            buy_size_bps: 10_000,
+            sell_size_bps: 10_000,
         }
     }
 }
 impl Policy {
+    pub fn buy_size(&self, bounded_amount: u64) -> u64 {
+        (bounded_amount as u128 * self.buy_size_bps.min(10_000) as u128 / 10_000) as u64
+    }
+    pub fn sell_size(&self, tradable_quantity: u64) -> u64 {
+        (tradable_quantity as u128 * self.sell_size_bps.min(10_000) as u128 / 10_000) as u64
+    }
     pub fn net_edge(&self, prediction: f64, uncertainty: f64) -> f64 {
         prediction
             - self.uncertainty_weight * uncertainty

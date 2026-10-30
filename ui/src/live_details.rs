@@ -6,6 +6,39 @@ fn optional_money(v: &Value, scale: f64) -> String {
 }
 
 #[component]
+pub fn AllocationSetup() -> Element {
+    let ctx = use_context::<Context>();
+    let data = (ctx.state)();
+    let a = &data["real"];
+    let received = use_signal(String::new);
+    let cost = use_signal(String::new);
+    let enabled = a["reserve_bps"] == 2000;
+    rsx! {
+        section {class:"panel spaced",
+            h2 {"สำรอง 20% · ส่วนเทรด 80%"}
+            p {"แบ่งแยกแต่ละเหรียญ เงินสำรองเดิมไม่ถูกนำมาคิดเป็นทุนเทรดซ้ำ เมื่อขายได้ USDC หรือซื้อได้ SOL จะแบ่งยอดรับใหม่ 20/80 เช่นกัน ส่วนสำรองจึงอาจมากกว่า 20% หลังเทรด"}
+            if !enabled || a["sol_funding"].is_null() {
+                p {"บันทึก SOL ที่ซื้อจากทุนก้อนเดิม: แอปจะนำเข้าบัญชีได้ไม่เกิน 80% ของยอดที่เหลือ และกัน SOL อย่างน้อยตามค่าธรรมเนียมที่กำหนด ไม่มีการโอนหรือซื้อขายจากปุ่มนี้"}
+                LiveField {label:"SOL ที่ได้รับจากการโอนครั้งนั้น (ดูยอดรับในประวัติ Phantom)",value:received}
+                LiveField {label:"USDC ที่ใช้ซื้อ SOL ก้อนนั้น จากทุนเดิมที่บันทึกไว้",value:cost}
+                if !enabled {p {class:"muted small","ถ้ายังไม่ทราบยอดหรือต้นทุน SOL เว้นทั้งสองช่องไว้เพื่อตั้ง 20/80 เฉพาะทุนที่บันทึกแล้ว SOL ที่ยังไม่บันทึกต้นทุนจะใช้เทรดไม่ได้"}}
+                Action {label:if enabled{"บันทึก SOL เดิมเป็นทุนเพิ่มเติม"}else{"บันทึกการแบ่งทุน 20/80"},action:"live_allocate_80_20",payload:json!({"received_sol":received(),"source_usdc":cost()})}
+            }
+            if enabled {
+                p {"ใช้กฎ 20/80 แล้ว · USDC สำรอง {n(&a[\"config\"][\"reserve\"])/1e6:.6} · ยังตรวจวงเงินต่อไม้ จำนวนไม้ และ SOL สำหรับค่าธรรมเนียม"}
+                if !a["sol_funding"].is_null() {
+                    p {"SOL เดิมที่นำมาทำไม้เทรด {n(&a[\"sol_funding\"][\"imported_sol\"])/1e9:.9} · ต้นทุน {n(&a[\"sol_funding\"][\"imported_cost_usdc\"])/1e6:.6} USDC / ฿{money(n(&a[\"sol_funding\"][\"imported_cost_satang\"])/100.0)} แบ่งมาจากเงินต้นก้อนเดิม ไม่ใช่การซื้อใหม่โดยบอต"}
+                }
+            }
+            p {class:"muted small","สูตรเลือกขนาดไม้ได้เฉพาะส่วนเทรด ห้ามลดเงินสำรอง ถ้าค่าธรรมเนียมไม่คุ้มจะไม่เตรียมรายการ ขายเพื่อทบทวนความเสี่ยงอาจขาดทุนและต้องยืนยันเอง"}
+            if data["real_advice"]["model_eligible"]==true {
+                p {"สูตรที่เลือก: ซื้อ {n(&a[\"advice_policy\"][\"buy_size_bps\"])/100.0:.0}% ของวงเงินที่จัดให้ไม้ · ขายทำกำไร {n(&a[\"advice_policy\"][\"sell_size_bps\"])/100.0:.0}% ของ SOL ส่วนเทรดในไม้"}
+            }
+        }
+    }
+}
+
+#[component]
 pub fn LiveDetails() -> Element {
     let ctx = use_context::<Context>();
     let data = (ctx.state)();
@@ -34,7 +67,8 @@ pub fn LiveDetails() -> Element {
                 p{class:"muted small","ตรวจยอด: {chart::thai_time(n(&r[\"checked_at\"]) as i64)} · กัน SOL ขั้นต่ำ {n(&r[\"gas_floor\"])/1e9:.3} สำหรับค่าเครือข่าย"}
                 if r["gas_low"]==true{p{class:"warning","SOL สำหรับค่าธรรมเนียมต่ำกว่าที่กันไว้ เติม SOL หรือรอรีเฟรชยอดก่อนซื้อเพิ่ม"}}
                 if n(&r["wrapped_sol"])>0.0{p{class:"warning","มี wrapped SOL {n(&r[\"wrapped_sol\"])/1e9:.6} ซึ่งรวมในมูลค่ากระเป๋าแล้ว แต่ใช้จ่ายค่าเครือข่ายแทน native SOL ไม่ได้"}}
-                p{class:"account-explainer","SOL ที่เติมเป็นเงินค่าธรรมเนียม ไม่เพิ่มวงเงินเทรดและไม่นับเป็นกำไร ยอดกระเป๋าบนเชนลดตามค่าธรรมเนียมไปแล้ว จึงไม่หักซ้ำ ค่า USDC/บาทของค่าเครือข่ายใช้ราคาตอนบันทึก เฉพาะรายการที่บอตบันทึกได้ ค่า swap และ slippage สะท้อนในยอดรับจริงแล้ว"}
+                p{class:"account-explainer","SOL ที่ยังไม่บันทึกเป็นทุนใช้จ่ายค่าธรรมเนียม ไม่เพิ่มวงเงินเทรดอัตโนมัติ ยอดกระเป๋าบนเชนลดตามค่าธรรมเนียมไปแล้ว จึงไม่หักซ้ำ ค่า swap และ slippage สะท้อนในยอดรับจริงแล้ว"}
+                div {class:"watch-row",span {"SOL ในไม้: ส่วนเทรด / ส่วนสำรองห้ามขาย"}strong {"{n(&r[\"tradable_sol\"])/1e9:.9} / {n(&r[\"reserved_layer_sol\"])/1e9:.9}"}}
             }else{p{"ยังไม่มีข้อมูลยอดกระเป๋าที่ตรวจแล้ว กดรีเฟรชราคา เรตบาท และยอดกระเป๋า"}}
         }
         section{class:"panel spaced",h2{"ข้อมูลที่บอตใช้ตัดสินใจตอนนี้"}

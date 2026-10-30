@@ -10,11 +10,15 @@ pub struct Metrics {
     pub net_return: f64,
     pub max_drawdown: f64,
     pub trades: usize,
+    #[serde(default)]
+    pub entries: usize,
     pub review_triggered: bool,
     pub equity_curve: Vec<f64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Research {
+    #[serde(default)]
+    pub execution_version: u32,
     pub version: String,
     pub model: ForecastModel,
     pub policy: Policy,
@@ -28,6 +32,58 @@ pub struct Research {
     pub explanation: String,
 }
 
+impl Research {
+    /// Passing this gate permits human-approved advice, not unattended trading
+    /// or a claim of profitability. Unknown/legacy statuses fail closed.
+    pub fn live_eligibility(&self) -> Result<(), &'static str> {
+        match self.status.as_str() {
+            "shadow_candidate" => {}
+            "rejected" => return Err("สูตรทดสอบไม่ผ่าน (rejected) ยังใช้เสนอซื้อไม่ได้"),
+            "insufficient_evidence" => {
+                return Err("หลักฐานทดสอบยังไม่พอ (insufficient_evidence) ยังใช้เสนอซื้อไม่ได้");
+            }
+            _ => return Err("ไม่รู้จักสถานะผลทดสอบ ยังใช้สูตรนี้เสนอซื้อไม่ได้"),
+        }
+        if self.execution_version != 2 {
+            return Err("ผลทดสอบรุ่นเก่ายังไม่รวมสำรอง 20/80 และขนาดไม้ ต้องทดสอบด้วยข้อมูลชุดใหม่ก่อน");
+        }
+        // Recheck the recorded evidence rather than trusting a status label.
+        if self.holdout.entries < 8
+            || self.holdout.trades < self.holdout.entries
+            || !self.holdout.net_return.is_finite()
+            || self.holdout.net_return <= 0.0
+            || !self.holdout.max_drawdown.is_finite()
+            || !(0.0..0.1).contains(&self.holdout.max_drawdown)
+            || self.version != self.model.version
+            || self.trained_through != self.model.training_end
+            || !(2500..=10_000).contains(&self.policy.buy_size_bps)
+            || !(2500..=10_000).contains(&self.policy.sell_size_bps)
+            || !self
+                .model
+                .weights
+                .iter()
+                .chain(self.model.means.iter())
+                .all(|v| v.is_finite())
+            || !self.model.scales.iter().all(|v| v.is_finite() && *v > 0.0)
+            || !self.model.uncertainty.is_finite()
+            || self.model.uncertainty < 0.0
+            || ![
+                self.policy.min_edge,
+                self.policy.uncertainty_weight,
+                self.policy.take_profit_atr,
+                self.policy.review_atr,
+            ]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0)
+            || self.policy.fee_bps > 1000
+            || self.policy.slippage_bps > 1000
+        {
+            return Err("หลักฐานทดสอบไม่ผ่านเกณฑ์หรือไม่ตรงกับสูตร ยังใช้เสนอซื้อไม่ได้");
+        }
+        Ok(())
+    }
+}
+
 /// Closed-bar decision, next-bar-open execution. No optimistic intrabar fills.
 /// A review trigger freezes new entries and holds the position through the end:
 /// it never assumes a human approved a stop-loss. All open losses are marked.
@@ -38,9 +94,10 @@ pub fn backtest(
     start: usize,
     end: usize,
 ) -> Metrics {
-    let Ok(mut ledger) = Ledger::new(1000 * USDC, 400 * USDC, 4) else {
+    let Ok(mut ledger) = Ledger::new(1000 * USDC, 200 * USDC, 2) else {
         return Metrics::default();
     };
+    ledger.reserve_bps = 2000;
     let features = calculate(candles);
     let mut metrics = Metrics::default();
     let mut last_buy = 0;
@@ -51,10 +108,9 @@ pub fn backtest(
         };
         let previous = &candles[i - 1];
         // Only information available before this bar may veto its opening fill.
-        let review = ledger
-            .layers
-            .iter()
-            .any(|l| l.quantity > 0 && previous.close <= l.review_price as f64 / USDC as f64);
+        let review = ledger.layers.iter().any(|l| {
+            l.tradable_quantity() > 0 && previous.close <= l.review_price as f64 / USDC as f64
+        });
         if review {
             metrics.review_triggered = true;
         }
@@ -63,10 +119,10 @@ pub fn backtest(
             .iter()
             .filter(|l| {
                 !metrics.review_triggered
-                    && l.quantity > 0
+                    && l.tradable_quantity() > 0
                     && previous.close >= l.target_price as f64 / USDC as f64
             })
-            .map(|l| (l.id, l.quantity))
+            .map(|l| (l.id, policy.sell_size(l.tradable_quantity())))
             .collect();
         for (id, quantity) in sell_ids {
             if let Ok(price) = price_units(c.open * (1.0 - policy.slippage_bps as f64 / 10_000.0)) {
@@ -74,7 +130,7 @@ pub fn backtest(
             }
         }
         if !metrics.review_triggered
-            && ledger.open_count() < 4
+            && ledger.open_count() < ledger.max_layers
             && i >= last_buy + policy.cooldown_bars
         {
             if let Some(ind) = &features[i - 1] {
@@ -88,7 +144,11 @@ pub fn backtest(
                     ) {
                         if ledger
                             .buy(
-                                150 * USDC,
+                                policy.buy_size(
+                                    (ledger.available()
+                                        / (ledger.max_layers - ledger.open_count()) as u64)
+                                        .min(400 * USDC),
+                                ),
                                 price,
                                 policy.fee_bps,
                                 c.time,
@@ -113,7 +173,7 @@ pub fn backtest(
         if ledger
             .layers
             .iter()
-            .any(|l| l.quantity > 0 && c.close <= l.review_price as f64 / USDC as f64)
+            .any(|l| l.tradable_quantity() > 0 && c.close <= l.review_price as f64 / USDC as f64)
         {
             metrics.review_triggered = true;
         }
@@ -126,6 +186,7 @@ pub fn backtest(
         .last()
         .map_or(0.0, |e| e / 1000.0 - 1.0);
     metrics.trades = ledger.fills.len();
+    metrics.entries = ledger.fills.iter().filter(|f| f.side == "buy").count();
     metrics
 }
 
@@ -177,6 +238,8 @@ pub fn optimize(candles: &[Candle]) -> Result<Research, String> {
                 take_profit_atr: 1.5 + unit() * 3.5,
                 review_atr: 3.0,
                 cooldown_bars: 4 + (unit() * 12.0) as usize,
+                buy_size_bps: [2500, 5000, 7500, 10_000][(unit() * 4.0) as usize],
+                sell_size_bps: [2500, 5000, 7500, 10_000][(unit() * 4.0) as usize],
                 ..Policy::default()
             }
         };
@@ -207,7 +270,7 @@ pub fn optimize(candles: &[Candle]) -> Result<Research, String> {
         n,
     );
     // This is an honest research candidate, not an automatically promoted live model.
-    let status = if holdout.trades < 8 {
+    let status = if holdout.entries < 8 {
         "insufficient_evidence"
     } else if holdout.net_return <= 0.0 || holdout.max_drawdown >= 0.1 {
         "rejected"
@@ -215,7 +278,7 @@ pub fn optimize(candles: &[Candle]) -> Result<Research, String> {
         "shadow_candidate"
     }
     .to_string();
-    Ok(Research {version,model,policy:best,trials,validation,holdout,baseline,status,trained_through,holdout_start:candles[validation_end+HORIZON].time,explanation:"Chronological 55% train / 10% calibration / 17% validation / 18% holdout. Four-bar gaps; 64 validation trials. Simulated next-open fills with fees and slippage. Human review holds losing positions; no guaranteed stop. This short sample is research evidence only; no automatic promotion.".into()})
+    Ok(Research {execution_version:2,version,model,policy:best,trials,validation,holdout,baseline,status,trained_through,holdout_start:candles[validation_end+HORIZON].time,explanation:"Chronological 55% train / 10% calibration / 17% validation / 18% holdout. Four-bar gaps; 64 validation trials including buy/sell sizing. Fixed 20% reserves, two tradable layers. Simulated next-open fills with fees and slippage; live quotes must also cover network costs. Human review holds losing positions; no guaranteed stop. Research evidence only; no automatic promotion.".into()})
 }
 
 pub fn demo_candles() -> Vec<Candle> {
@@ -250,6 +313,8 @@ mod tests {
         }
         let changed = optimize(&candles).expect("research");
         assert_eq!(original.policy.min_edge, changed.policy.min_edge);
+        assert_eq!(original.policy.buy_size_bps, changed.policy.buy_size_bps);
+        assert_eq!(original.policy.sell_size_bps, changed.policy.sell_size_bps);
         assert_eq!(original.model.weights, changed.model.weights);
         assert_eq!(original.model.means, changed.model.means);
     }

@@ -70,6 +70,9 @@ async fn run_action(mut ctx: Context, action: String, payload: Value) {
                     "enable_live" => "เปิดเสนอซื้อเพิ่มแล้ว ถ้าสัญญาณยังเป็น wait ระบบจะยังไม่เตรียมซื้อ",
                     "research" => "ทดสอบสูตรเสร็จแล้ว ดูผลใน Research หรือกดใช้สูตรที่ทดสอบล่าสุด",
                     "live_use_model" => "เลือกสูตรแนะนำแล้ว ระบบอาจยังให้รอหากโอกาสไม่ผ่านเกณฑ์",
+                    "live_allocate_80_20" => {
+                        "บันทึกทุนและสำรอง 20/80 แล้ว ยังไม่มีการซื้อขาย ตรวจตัวเลขแล้วเริ่มเฝ้าตลาดได้"
+                    }
                     "live_watch_start" => "เริ่มเฝ้าตลาดแล้ว เมื่อมีสัญญาณจะขึ้นการ์ดและแจ้งเตือนให้ตรวจรายการ",
                     "live_watch_stop" => "หยุดเฝ้าตลาดและพักซื้อเพิ่มแล้ว เหรียญที่ถือยังอยู่ในกระเป๋า",
                     "live_watch_snooze" => "พักการแจ้งเตือนสัญญาณนี้ 15 นาทีแล้ว ไม่มีการซื้อขาย",
@@ -180,7 +183,7 @@ fn app() -> Element {
         div {class:"shell",
             aside {class:"sidebar",div {class:"brand",div {class:"brand-mark","C↗"}div {class:"brand-name",div {"CRYPTO"}div {"BROS"}}}div {class:"workspace-label","PERSONAL TRADING LAB"}
                 nav {for (index,name) in ["Overview","Live trading","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
-                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.4.0 · MANUAL APPROVAL"}}
+                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.5.0 · MANUAL APPROVAL"}}
             }
             main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge",if tab()=="Live trading"{"REAL MONEY · PHANTOM"}else if tab()=="Overview"||tab()=="Layers"{"PAPER TRADING"}else{"RESEARCH / ACCOUNT TOOLS"}}}}
                 div {class:"content",
@@ -278,6 +281,7 @@ fn Research() -> Element {
             if r.is_null(){div {class:"empty",h3 {"Your first experiment starts here."}p {"Load at least 600 completed candles. This initial sample is exploratory, not proof of a profitable strategy."}}}else{
                 div {class:"metrics research-metrics",Metric {label:"HOLDOUT RETURN",value:pct(n(&r["holdout"]["net_return"])),detail:"Net costs; open positions marked"}Metric {label:"MAX DRAWDOWN",value:format!("{:.2}%",n(&r["holdout"]["max_drawdown"])*100.0),detail:"Holdout equity loss from peak"}Metric {label:"HOLDOUT FILLS",value:format!("{}",n(&r["holdout"]["trades"]) as u64),detail:"Few fills mean weak evidence"}Metric {label:"DEFAULT POLICY",value:pct(n(&r["baseline"]["net_return"])),detail:"Untuned policy benchmark"}}
                 div {class:"research-status",span {class:"chip","{s(&r[\"status\"])}"}span {class:"muted","{s(&r[\"version\"])}"}Action {label:"Select for paper trading",action:"activate_paper"}}
+                p {class:"muted","ชุดทดสอบแยกมีการเปิดไม้ซื้อ {n(&r[\"holdout\"][\"entries\"]) as usize} ไม้ · ต้องมีอย่างน้อย 8 ไม้ ผลตอบแทนสุทธิเป็นบวก และขาดทุนจากจุดสูงสุดต่ำกว่า 10% จึงเสนอใช้กับเงินจริงได้ การแบ่งขายหลายครั้งไม่นับเป็นไม้ซื้อเพิ่ม"}
             }
         }
         div {class:"bottom-grid spaced",
@@ -343,12 +347,15 @@ fn TradeWatch() -> Element {
             div {class:"actions",
                 if enabled {Action {label:"หยุดเฝ้าตลาด",action:"live_watch_stop"}}
                 else {Action {label:"เริ่มเฝ้าตลาด",action:"live_watch_start",kind:"primary"}}
-                if enabled && data["live_enabled"]!=true && data["real_advice"]["risk_blocked"]!=true && data["real"]["pending"].is_null(){Action {label:"กลับมาเฝ้าทั้งซื้อและขาย",action:"live_watch_start",kind:"primary"}}
+                if enabled && data["live_enabled"]!=true && data["real_advice"]["model_eligible"]==true && data["real_advice"]["risk_blocked"]!=true && data["real"]["pending"].is_null(){Action {label:"กลับมาเฝ้าทั้งซื้อและขาย",action:"live_watch_start",kind:"primary"}}
                 button {class:"button secondary",onclick:move |_|{spawn(async move {
                     ctx.notice.set(match invoke("test_notification",json!({})).await {Ok(_)=>"ส่งคำขอแจ้งเตือนทดสอบแล้ว ถ้าเห็นข้อความ กดเพื่อกลับหน้านี้ ไม่มีการซื้อขาย".into(),Err(e)=>e});
                 });},"ทดสอบแจ้งเตือน"}
             }
             p {class:"muted small","{s(&data[\"notification_status\"])}"}
+            if enabled && data["real_advice"]["model_eligible"]==false {
+                p {class:"warning","ยังเฝ้าเป้าขายและความเสี่ยงของไม้เดิม แต่สูตรยังใช้เสนอซื้อไม่ได้ ต้องเลือกสูตรที่ผ่านเกณฑ์ก่อน"}
+            }
             p {class:"watch-copy","วงเงินสูงสุดต่อไม้ {money(n(&data[\"real\"][\"config\"][\"max_buy\"])/1e6)} USDC ระบบจะลดจำนวนลงตามเงินที่ใช้ได้และจำนวนไม้ที่เหลือ"}
             if !connected {p {class:"warning","ขาดการเชื่อมต่อกับตัวเฝ้าตลาด ข้อมูลอาจเก่า กรุณาเปิดแอปใหม่ก่อนทำรายการ"}}
             else if items(&watch["signals"]).is_empty(){div {class:"watch-empty","{s(&watch[\"message\"])}"}}
@@ -361,7 +368,7 @@ fn TradeWatch() -> Element {
                         h3 {"{s(&signal[\"title\"])}"}
                         p {class:"signal-reason","{s(&signal[\"reason\"])}"}
                         p {class:"signal-money",if is_buy {"ใช้ {money(n(&signal[\"amount_usdc\"])/1e6)} USDC · ประมาณ ฿{money(n(&signal[\"value_satang\"])/100.0)}"}
-                            else {"ขาย SOL ของไม้ #{n(&signal[\"layer_id\"]) as u64} ทั้งหมด ({n(&signal[\"quantity_sol\"])/1e9:.6} SOL)"}}
+                            else {"เสนอขาย SOL ของไม้ #{n(&signal[\"layer_id\"]) as u64} จำนวน {n(&signal[\"quantity_sol\"])/1e9:.9} SOL (ไม่แตะส่วนสำรอง)"}}
                         if !is_buy {p {"ผลกำไร/ขาดทุน ณ ราคาอ้างอิง: {money(n(&signal[\"pnl_usdc\"])/1e6)} USDC / ฿{money(n(&signal[\"pnl_satang\"])/100.0)}"}}
                         p {class:"signal-estimate","ตัวเลขยังเป็นประมาณการก่อนค่าใช้จ่ายขาออก กดแล้วจะตรวจราคาจริงใหม่ หากสัญญาณเปลี่ยนจะไม่เตรียมคำสั่ง"}
                         div {class:"actions",
@@ -432,6 +439,7 @@ fn LiveTrading() -> Element {
         }else{
             TradeWatch{}
             live_details::LiveDetails{}
+            live_details::AllocationSetup{}
             div {class:"metrics",Metric {label:"มูลค่าทุนบอต · USDC",value:metric("equity_usdc",1e6,""),detail:"USDC ในบัญชีบอต + มูลค่า SOL ที่บอตซื้อไว้",accent:true}Metric {label:"ทุนบอตคิดเป็นเงินบาท",value:metric("equity_satang",100.0,"฿"),detail:"คำนวณตามเรตอ้างอิง ยังไม่ใช่ยอดถอนเข้าธนาคาร"}Metric {label:"ผลกำไร / ขาดทุนจากบอต · USDC",value:metric("bot_pnl_usdc",1e6,""),detail:"ตั้งแต่เริ่มใช้บอต หลังหักค่าเครือข่ายที่บันทึกแล้ว"}Metric {label:"ผลเทียบเงินต้นเดิม · บาท",value:metric("historical_pnl_satang",100.0,"฿"),detail:"รวมผลราคาและเรตเงินตั้งแต่ก่อนเริ่มใช้บอต"}}
             section {class:"panel spaced",div {class:"panel-heading",h2 {"ทุน เงินสำรอง และค่าเงินบาท"}span {class:"chip",if data["live_enabled"]==true{"เปิดเสนอซื้อ · มึงเซ็นทุกไม้"}else{"พักการซื้อเพิ่ม"}}}
                 div {class:"watch-row",span {"เงินต้นเดิมที่แบ่งให้บอต (บาท)"}strong {"฿{money(n(&account[\"initial_cost_satang\"])/100.0)}"}}
@@ -466,11 +474,11 @@ fn LiveTrading() -> Element {
                 }
             }
             if account["reconciliation_error"].is_string(){p {class:"warning","{s(&account[\"reconciliation_error\"])}"}}
-            section {class:"panel spaced",h2 {"SOL ที่ถือ แยกตามไม้ที่ซื้อ"}p {class:"muted small","Unrealized P&L includes allocated entry network costs; future exit costs are not yet known."}table {thead {tr {th {"LAYER / OPENED"}th {"SOL"}th {"COST · USDC / THB"}th {"UNREALIZED · USDC / THB"}th {"TARGET / REVIEW · USDC"}th {"PREPARE EXIT"}}}tbody {for layer in items(&account["layers"]){tr {
-                td {"#{n(&layer[\"id\"]) as u64}" div {class:"muted small","{local_time(n(&layer[\"opened_at\"]))}"}}td {"{n(&layer[\"quantity\"])/1e9:.9}"}td {"{money(n(&layer[\"cost_usdc\"])/1e6)} / ฿{money(n(&layer[\"cost_satang\"])/100.0)}"}
+            section {class:"panel spaced",h2 {"SOL ที่ถือ แยกตามไม้"}p {class:"muted small","ต้นทุนและกำไรของทั้งไม้รวมส่วนสำรอง แต่ปุ่มขายใช้ได้เฉพาะส่วนเทรด ยังไม่หักค่าใช้จ่ายขาออกจนกว่าจะตรวจราคาจริง"}table {thead {tr {th {"LAYER / OPENED"}th {"SOL"}th {"COST · USDC / THB"}th {"UNREALIZED · USDC / THB"}th {"TARGET / REVIEW · USDC"}th {"PREPARE EXIT"}}}tbody {for layer in items(&account["layers"]){tr {
+                td {"#{n(&layer[\"id\"]) as u64}" div {class:"muted small","{local_time(n(&layer[\"opened_at\"]))}"}}td {"{n(&layer[\"quantity\"])/1e9:.9}" p {class:"muted small","สำรอง {n(&layer[\"reserved_quantity\"])/1e9:.9}"}}td {"{money(n(&layer[\"cost_usdc\"])/1e6)} / ฿{money(n(&layer[\"cost_satang\"])/100.0)}"}
                 td {if advice["equity_usdc"].is_number(){"{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])-(n(&layer[\"cost_usdc\"])+n(&layer[\"entry_fee_usdc\"]))/1e6)} / ฿{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])*n(&data[\"thb_rate\"][\"micros\"])/1e6-(n(&layer[\"cost_satang\"])+n(&layer[\"entry_fee_satang\"]))/100.0)}"}else{"—"}}
                 td {"{money(n(&layer[\"target_price\"])/1e6)} / {money(n(&layer[\"review_price\"])/1e6)}"}
-                td {if n(&layer["quantity"])>0.0&&pending.is_null(){div {class:"actions compact",Action {label:"ขายครึ่งไม้",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":50})}Action {label:"ขายทั้งหมดของไม้นี้",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":100})}}}}
+                td {if n(&layer["quantity"])>n(&layer["reserved_quantity"])&&pending.is_null(){div {class:"actions compact",Action {label:"ขายครึ่งของส่วนเทรด",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":50})}Action {label:"ขายส่วนเทรดทั้งหมด",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":100})}}}}
             }}}}}
             section {class:"panel spaced",h2 {"ประวัติซื้อขายที่เครือข่ายยืนยันแล้ว"}p {class:"muted small","Only finalized transactions appear here. Realized P&L below excludes separately recorded network costs; the account totals above include them."}
                 if items(&account["fills"]).is_empty(){p {"ยังไม่มีรายการซื้อขายที่ยืนยันแล้ว"}}
@@ -488,7 +496,7 @@ fn Settings() -> Element {
     let ctx = use_context::<Context>();
     let data = (ctx.state)();
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.4.0 · manually approved trading"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.5.0 · manually approved trading"}}}
         div {class:"bottom-grid",
             updates_ui::Updates{}
             section {class:"panel",h2 {"Connections"}div {class:"watch-row",span {"Jupiter API key"}strong {if data["jupiter_key_configured"]==true{"CONFIGURED"}else{"KEYLESS QUOTES"}}}div {class:"watch-row",span {"Email notifications"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}

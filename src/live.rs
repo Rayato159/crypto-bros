@@ -1,4 +1,5 @@
 //! Real-money accounting, kept separate from simulated balances.
+pub use crypto_bros_core::ledger::reserved_part;
 use serde::{Deserialize, Serialize};
 
 pub const USDC: u64 = 1_000_000;
@@ -94,6 +95,8 @@ impl LiveConfig {
 pub struct RealLayer {
     pub id: u64,
     pub quantity: u64,
+    #[serde(default)]
+    pub reserved_quantity: u64,
     pub cost_usdc: u64,
     pub cost_satang: u64,
     pub entry_fee_usdc: u64,
@@ -102,6 +105,21 @@ pub struct RealLayer {
     pub review_price: u64,
     pub opened_at: i64,
     pub model: String,
+}
+impl RealLayer {
+    pub fn tradable_quantity(&self) -> u64 {
+        self.quantity.saturating_sub(self.reserved_quantity)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolFunding {
+    pub received_sol: u64,
+    pub source_usdc: u64,
+    pub imported_sol: u64,
+    pub imported_cost_usdc: u64,
+    pub imported_cost_satang: u64,
+    pub recorded_at: i64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealFill {
@@ -165,7 +183,15 @@ pub struct RealAccount {
     pub started_at: i64,
     pub advice_model: Option<crypto_bros_core::model::ForecastModel>,
     pub advice_policy: crypto_bros_core::model::Policy,
+    /// Immutable evidence for the selected model, independent of later research.
+    /// Old installations have no evidence and must explicitly select a passing candidate.
+    #[serde(default)]
+    pub advice_research: Option<crypto_bros_core::research::Research>,
     pub last_advice_candle: i64,
+    #[serde(default)]
+    pub reserve_bps: u16,
+    #[serde(default)]
+    pub sol_funding: Option<SolFunding>,
 }
 impl RealAccount {
     pub fn new(
@@ -213,14 +239,189 @@ impl RealAccount {
             started_at: now,
             advice_model: None,
             advice_policy: Default::default(),
+            advice_research: None,
             last_advice_candle: 0,
+            reserve_bps: 0,
+            sol_funding: None,
         })
+    }
+    pub fn select_advice(
+        &mut self,
+        candidate: &crypto_bros_core::research::Research,
+    ) -> Result<(), &'static str> {
+        if self.pending.is_some() {
+            return Err("Resolve the pending order before changing the advice model");
+        }
+        candidate.live_eligibility()?;
+        self.advice_model = Some(candidate.model.clone());
+        self.advice_policy = candidate.policy.clone();
+        self.advice_research = Some(candidate.clone());
+        Ok(())
+    }
+    pub fn advice_eligibility(&self) -> Result<(), &'static str> {
+        let model = self
+            .advice_model
+            .as_ref()
+            .ok_or("ยังไม่ได้เลือกสูตรที่ผ่านการทดสอบสำหรับเสนอซื้อ")?;
+        let research = self
+            .advice_research
+            .as_ref()
+            .ok_or("สูตรเดิมไม่มีหลักฐานผลทดสอบที่ผูกไว้ กรุณาเลือกสูตรที่ผ่านการทดสอบใหม่ก่อนเสนอซื้อ")?;
+        research.live_eligibility()?;
+        if model != &research.model || self.advice_policy != research.policy {
+            return Err("สูตรหรือพารามิเตอร์ไม่ตรงกับหลักฐานทดสอบ กรุณาเลือกสูตรที่ผ่านใหม่");
+        }
+        Ok(())
     }
     pub fn equity(&self, price: u64) -> Result<u64, String> {
         self.layers.iter().try_fold(self.cash, |sum, l| {
             sum.checked_add(ratio(l.quantity, price, SOL)?)
                 .ok_or("Equity overflow".into())
         })
+    }
+    /// Explicitly reallocate recorded assets. This does not sign, swap, or
+    /// manufacture a chain fill. Original funding is apportioned, not duplicated.
+    pub fn allocate_80_20(
+        &mut self,
+        balances: &crate::chain::Balances,
+        received_sol: u64,
+        source_usdc: u64,
+        price: u64,
+        atr: u64,
+        rate: &ThbRate,
+        now: i64,
+    ) -> Result<(), String> {
+        if self.pending.is_some() || self.reconciliation_error.is_some() {
+            return Err("จัดการรายการค้างและตรวจยอดก่อนเปลี่ยนการแบ่งทุน".into());
+        }
+        let importing = received_sol > 0 || source_usdc > 0;
+        if self.sol_funding.is_some() || (self.reserve_bps != 0 && !importing) {
+            return Err("บันทึกการแบ่ง 20/80 แล้ว ไม่สามารถนำ SOL ก้อนเดิมมาบวกทุนซ้ำ".into());
+        }
+        if (importing && (received_sol == 0 || source_usdc == 0))
+            || price == 0
+            || atr == 0
+            || !rate.fresh(now)
+            || !(0..120).contains(&(now - balances.checked_at))
+            || balances.wrapped_sol != 0
+            || balances.usdc < self.cash
+            || source_usdc > self.source_total_usdc.saturating_sub(self.initial_usdc)
+        {
+            return Err("ตรวจยอด SOL ที่ได้รับและ USDC ต้นทุนจากก้อนเดิม แล้วรีเฟรชยอดกระเป๋า".into());
+        }
+        let tracked = self.layers.iter().try_fold(0_u64, |sum, l| {
+            sum.checked_add(l.quantity).ok_or("SOL overflow")
+        })?;
+        let external = balances
+            .sol
+            .checked_sub(tracked)
+            .ok_or("ยอด SOL ต่ำกว่าที่บันทึก")?;
+        let quantity =
+            (received_sol.min(external) - reserved_part(received_sol.min(external), 2000)).min(
+                external.saturating_sub(
+                    self.config
+                        .sol_gas_reserve
+                        .saturating_add(self.config.max_network_fee),
+                ),
+            );
+        if importing
+            && (quantity == 0
+                || self
+                    .layers
+                    .iter()
+                    .filter(|l| l.tradable_quantity() > 0)
+                    .count()
+                    >= self.config.max_layers)
+        {
+            return Err("SOL ไม่พอหลังกันค่าธรรมเนียม หรือจำนวนไม้เต็ม ยังแบ่งก้อนนี้เข้าเทรดไม่ได้".into());
+        }
+        let cost = if importing {
+            ratio(source_usdc, quantity, received_sol)?
+        } else {
+            0
+        };
+        let cost_thb = ratio(self.source_total_cost_satang, cost, self.source_total_usdc)?;
+        if importing && (cost == 0 || cost_thb == 0) {
+            return Err("ทุนก้อนนี้เล็กเกินกว่าจะบันทึกต้นทุนได้".into());
+        }
+        let mark = ratio(quantity, price, SOL)?;
+        let basis_price = if importing {
+            ratio(cost, SOL, quantity)?
+        } else {
+            0
+        };
+        let mut next = self.clone();
+        if next.reserve_bps == 0 {
+            next.reserve_bps = 2000;
+            next.config.reserve = reserved_part(next.cash, 2000);
+            for layer in &mut next.layers {
+                layer.reserved_quantity = reserved_part(layer.quantity, 2000);
+            }
+        }
+        let id = next
+            .layers
+            .last()
+            .map_or(Some(1), |l| l.id.checked_add(1))
+            .ok_or("Layer id overflow")?;
+        let policy = if next.advice_eligibility().is_ok() {
+            next.advice_policy.clone()
+        } else {
+            Default::default()
+        };
+        let target_distance = (atr as f64 * policy.take_profit_atr) as u64;
+        let review_distance = (atr as f64 * policy.review_atr) as u64;
+        if importing {
+            next.layers.push(RealLayer {
+                id,
+                quantity,
+                reserved_quantity: 0,
+                cost_usdc: cost,
+                cost_satang: cost_thb,
+                entry_fee_usdc: 0,
+                entry_fee_satang: 0,
+                target_price: basis_price
+                    .checked_add(target_distance)
+                    .ok_or("Target overflow")?,
+                review_price: price.saturating_sub(review_distance).max(1),
+                opened_at: now,
+                model: "imported-sol-from-original-capital".into(),
+            });
+        }
+        // Mark contributions at entry into bot tracking, so deposits are not bot profit.
+        next.initial_usdc = next
+            .initial_usdc
+            .checked_add(mark)
+            .ok_or("Capital overflow")?;
+        next.initial_reference_satang = next
+            .initial_reference_satang
+            .checked_add(rate.satang(mark)?)
+            .ok_or("Capital overflow")?;
+        next.initial_cost_satang = next
+            .initial_cost_satang
+            .checked_add(cost_thb)
+            .ok_or("Cost overflow")?;
+        let exposure = next.layers.iter().try_fold(0_u64, |sum, l| {
+            sum.checked_add(ratio(l.tradable_quantity(), price, SOL)?)
+                .ok_or_else(|| "Exposure overflow".to_string())
+        })?;
+        next.config.trading_budget = next
+            .cash
+            .saturating_sub(next.config.reserve)
+            .checked_add(exposure)
+            .ok_or("Budget overflow")?;
+        next.config.max_buy = next.config.trading_budget / next.config.max_layers as u64;
+        if importing {
+            next.sol_funding = Some(SolFunding {
+                received_sol,
+                source_usdc,
+                imported_sol: quantity,
+                imported_cost_usdc: cost,
+                imported_cost_satang: cost_thb,
+                recorded_at: now,
+            });
+        }
+        *self = next;
+        Ok(())
     }
     pub fn entry_blocked(&self, price: u64) -> bool {
         let Ok(equity) = self.equity(price) else {
@@ -231,7 +432,7 @@ impl RealAccount {
             || self
                 .layers
                 .iter()
-                .any(|l| l.quantity > 0 && price <= l.review_price)
+                .any(|l| l.tradable_quantity() > 0 && price <= l.review_price)
     }
     pub fn check_buy(&self, amount: u64, price: u64) -> Result<(), String> {
         if self.pending.is_some() || self.entry_blocked(price) {
@@ -245,7 +446,12 @@ impl RealAccount {
         if amount == 0
             || amount > self.config.max_buy
             || exposure.saturating_add(amount) > self.config.trading_budget
-            || self.layers.iter().filter(|l| l.quantity > 0).count() >= self.config.max_layers
+            || self
+                .layers
+                .iter()
+                .filter(|l| l.tradable_quantity() > 0)
+                .count()
+                >= self.config.max_layers
             || self.cash.saturating_sub(amount)
                 < self.config.reserve.saturating_add(self.parked_profit)
             || amount > self.cash
@@ -292,6 +498,7 @@ impl RealAccount {
             next.layers.push(RealLayer {
                 id,
                 quantity: output,
+                reserved_quantity: reserved_part(output, next.reserve_bps),
                 cost_usdc: input,
                 cost_satang: acquisition,
                 entry_fee_usdc: fee_usdc,
@@ -311,7 +518,7 @@ impl RealAccount {
                 .iter_mut()
                 .find(|l| l.id == order.layer_id)
                 .ok_or("Tracked layer is missing")?;
-            if input == 0 || input > layer.quantity {
+            if input == 0 || input > layer.tradable_quantity() {
                 return Err("Sale exceeds tracked SOL".into());
             }
             let cost = ratio(layer.cost_usdc, input, layer.quantity)?;
@@ -324,6 +531,11 @@ impl RealAccount {
             layer.entry_fee_usdc -= entry_fee;
             layer.entry_fee_satang -= entry_fee_thb;
             next.cash = next.cash.checked_add(output).ok_or("Cash overflow")?;
+            next.config.reserve = next
+                .config
+                .reserve
+                .checked_add(reserved_part(output, next.reserve_bps))
+                .ok_or("Reserve overflow")?;
             let proceeds_thb = order.rate.satang(output)?;
             next.cash_basis_satang = next
                 .cash_basis_satang
@@ -332,12 +544,13 @@ impl RealAccount {
             let gain = signed_difference(output, cost)?;
             next.parked_profit = next
                 .parked_profit
-                .checked_add(
-                    output
+                .checked_add({
+                    let gain = output
                         .saturating_sub(cost)
                         .saturating_sub(fee_usdc)
-                        .saturating_sub(entry_fee),
-                )
+                        .saturating_sub(entry_fee);
+                    gain.saturating_sub(reserved_part(gain, next.reserve_bps))
+                })
                 .ok_or("Profit overflow")?;
             (
                 order.layer_id,

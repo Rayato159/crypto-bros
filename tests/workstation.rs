@@ -196,7 +196,7 @@ fn pending_fixture() -> crypto_bros::live::PendingOrder {
         price: 100_000_000,
         target_price: 110_000_000,
         review_price: 90_000_000,
-        model: "synthetic".into(),
+        model: "manual-live".into(),
         message: None,
     }
 }
@@ -231,6 +231,7 @@ async fn approval_is_origin_bound_expiring_and_invalidated_by_pause() {
         let mut e = h.state.engine.lock().await;
         let mut account = real_fixture();
         account.pending = Some(pending_fixture());
+        account.reserve_bps = 2000;
         e.snapshot.real = Some(account);
         e.snapshot.live_enabled = true;
     }

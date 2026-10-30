@@ -24,6 +24,14 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
         .iter()
         .try_fold(0u64, |sum, l| sum.checked_add(l.quantity));
     let gas = tracked.map(|q| b.sol.saturating_sub(q));
+    let reserved_layers = a
+        .layers
+        .iter()
+        .try_fold(0_u64, |sum, l| sum.checked_add(l.reserved_quantity));
+    let tradable = a
+        .layers
+        .iter()
+        .try_fold(0_u64, |sum, l| sum.checked_add(l.tradable_quantity()));
     let sol_value = price.and_then(|p| ratio(b.sol, p, SOL).ok());
     let gas_value = price.zip(gas).and_then(|(p, q)| ratio(q, p, SOL).ok());
     let total = price
@@ -43,6 +51,7 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
     json!({"available":true,"fresh":(0..120).contains(&(now-b.checked_at))&&price.is_some()&&rate.is_some()&&s.watch.error.is_none(),
         "checked_at":b.checked_at,"native_sol":b.sol,"wrapped_sol":b.wrapped_sol,"usdc":b.usdc,
         "tracked_sol":tracked,"gas_sol":gas,"gas_floor":a.config.sol_gas_reserve,
+        "reserved_layer_sol":reserved_layers,"tradable_sol":tradable,"reserve_bps":a.reserve_bps,
         "gas_low":gas.is_none_or(|g|g<a.config.sol_gas_reserve),
         "sol_satang":baht(sol_value),"gas_satang":baht(gas_value),
         "wallet_usdc":total,"wallet_satang":baht(total),

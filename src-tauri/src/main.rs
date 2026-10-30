@@ -127,6 +127,7 @@ async fn command(
         "wallet_address",
         "live_refresh",
         "live_setup",
+        "live_allocate_80_20",
         "enable_live",
         "live_pause",
         "live_use_model",

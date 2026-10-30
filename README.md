@@ -2,7 +2,7 @@
 
 Rust desktop workstation for SOL/USDC research, paper trading and **individually approved real trades**. Dioxus Web runs inside Tauri; the Rust worker keeps running independently of the window. SQLite keeps separate paper and real ledgers, models and feedback locally.
 
-**0.4.0 adds a signed update channel, SOL gas-wallet valuation, fee details, live decision indicators and interactive candle tooltips.** Every real Jupiter swap still requires your Phantom signature. Paper mode remains the default; real funding and limits must be configured explicitly. Targets follow each layer and estimated costs. There is no mandatory daily or weekly return and no pressure to enter a trade while the computer is running. Building and testing this app does not establish profitability or prove a user's mainnet execution.
+**0.5.0 enforces research eligibility, adds explicit 20/80 reserve allocation and optimizes bounded buy/sell sizes.** Every real Jupiter swap still requires your Phantom signature. Paper mode remains the default; real funding and limits must be configured explicitly. Targets follow each layer and estimated costs. There is no mandatory daily or weekly return and no pressure to enter a trade while the computer is running. Building and testing this app does not establish profitability or prove a user's mainnet execution.
 
 ## เฝ้าตลาดแบบไม่ต้องไล่กดหลายปุ่ม
 
@@ -61,10 +61,10 @@ Phantom holds the wallet and authorizes signatures. Jupiter finds swap routes an
 1. Connect the dedicated wallet, open **Live trading**, and refresh prices, FX and wallet. Synthetic prices cannot authorize real orders.
 2. Enter the original THB purchase cost, total USDC received from that purchase, and USDC allocated to the bot. The app assigns `original THB × allocated USDC / total USDC` as historical cost, rounded to satang. Confirm separately whether the original amount includes all fees. Personal amounts are never bundled into releases.
 3. Set the maximum active investment, maximum buy and unspent USDC reserve. The first release supports two open layers. Native SOL must separately cover tracked SOL positions, a 0.005 SOL fee buffer, the quoted network fee and any account rent. The buffer is not a per-transaction fee. Gasless and multisigner routes are intentionally unsupported.
-4. Enable manually approved buys. Run research and explicitly select its candidate for live advice. **เตรียมซื้อเมื่อผ่านโมเดล** requires a qualifying signal and rechecks the executable quote's estimated round-trip costs. **ซื้อเองด้วยเงินจริง (ข้ามโมเดล)** bypasses only the signal, retaining every hard limit.
+4. Configure the 20/80 allocation below, then start monitoring. Only eligible research can propose model buys. **เตรียมซื้อเมื่อผ่านโมเดล** requires a qualifying signal and rechecks the executable quote's estimated round-trip costs. **ซื้อเองด้วยเงินจริง (ข้ามโมเดล)** bypasses the model signal, model cooldown and forecast/cost threshold, retaining every hard limit.
 5. Review the prepared amounts, then open **ตรวจรายการและยืนยันใน Phantom**. Chrome is preferred, with the default browser as fallback. Compare the dedicated wallet, amount, minimum receipt and fees in Phantom. The approval link expires quickly; unlock Phantom before preparing a quote.
 6. The worker saves the verified signature before submission. A timeout leaves the order pending. Only finalized chain balances create a fill; clicking twice, restarting, or losing a response cannot authorize a second order. Use **ตรวจผลคำสั่งเดิมอีกครั้ง** after an ambiguous result. Do not manually repeat a pending trade elsewhere.
-7. Sell half or all of a tracked layer through the same approval flow. Profits stay parked until released, within the original caps. Targets and review prices are decision thresholds, not guaranteed execution prices.
+7. Sell half or all of a layer's tradable portion through the same approval flow. Protected SOL cannot be sold. Profits stay parked until released, within the caps. Targets and review prices are decision thresholds, not guaranteed execution prices.
 
 The live dashboard separates original allocated THB cost, current marked value, bot USDC performance, and bot THB performance since onboarding. Earlier SOL/FX changes belong to historical P&L, not bot returns. USDC/THB comes from a Coinbase reference rate; it is not a guaranteed Bitkub withdrawal rate. Actual network fees are recorded in SOL and valued at the order's reference prices; account rent is recorded separately. Unconfirmed funding fees remain explicitly marked as incomplete. External deposits do not increase limits, and withdrawals below tracked balances block further preparation.
 
@@ -112,6 +112,18 @@ The portable Node preparation command builds the worker and web frontend; Tauri/
 
 Signed in-app update infrastructure is implemented but unconfigured in this preview. It still needs an HTTPS update manifest and publisher-controlled signing key. See [release instructions](docs/RELEASING.md) and [verification log](docs/DEV_LOG.md).
 
+
+## รุ่น 0.5.0: ด่านโมเดล สำรอง 20/80 และขนาดไม้
+
+1. หลังอัปเดต เปิด **Live trading → สำรอง 20% · ส่วนเทรด 80%** แล้วตรวจยอดทุนเดิม แอปไม่เปลี่ยนบัญชีเงินจริงที่ติดตั้งอยู่จนกว่าจะกดบันทึกเอง
+2. ถ้ามี SOL ที่ซื้อจาก USDC ก้อนเดิม ให้กรอก **SOL ที่ได้รับจริงจากการโอนครั้งนั้น** และ **USDC ที่ใช้ซื้อ** แอปใช้ต้นทุนเงินบาทก้อนเดิมแบ่งตามสัดส่วน นำเข้าได้ไม่เกิน 80% ของ SOL ที่เหลือ และกัน SOL ขั้นต่ำพร้อมค่าธรรมเนียมอีกหนึ่งรายการ ตัวเลขทุนเพิ่มเพราะย้ายทรัพย์สินเดิมเข้าบัญชีบอต ไม่ใช่กำไรหรือการซื้อใหม่ ส่วน gas ที่ไม่นำเข้าแสดงแยกจากทุนบอต
+3. ถ้ายังไม่ทราบยอด/ต้นทุน SOL ให้เว้นทั้งสองช่องไว้เพื่อตั้งสัดส่วนเฉพาะทุนที่บันทึกแล้ว SOL นอกบัญชีจะใช้จ่ายค่าธรรมเนียมต่อไป บันทึก SOL ก้อนเดิมได้ภายหลังหนึ่งครั้ง การบันทึกซ้ำถูกปฏิเสธ
+4. USDC ที่มีตอนตั้งค่าและ SOL ในไม้เดิมแบ่งสำรอง 20% เมื่อซื้อได้ SOL หรือขายได้ USDC ยอดรับใหม่แบ่ง 20/80 อีกครั้ง ส่วนสำรองเดิมไม่ถูกนำมาใช้ซ้ำ สัดส่วนสำรองจึงอาจสูงกว่า 20% หลังเทรด SOL สำรองยังมีความเสี่ยงจากราคา และไม่ใช่เงินสดคงมูลค่า
+5. **เริ่มเฝ้าตลาด** ยังเฝ้าขายไม้เดิมได้แม้สูตรใช้ซื้อไม่ได้ การซื้อผ่านโมเดลต้องใช้ผลทดสอบรุ่นใหม่ที่สถานะ `shadow_candidate`, มีอย่างน้อย 8 ไม้ซื้อในชุดทดสอบแยก, ผลสุทธิเป็นบวก และ drawdown ต่ำกว่า 10% การแบ่งขายหลายครั้งไม่นับเป็นไม้ซื้อเพิ่ม สูตรเก่าที่ไม่มีหลักฐานผูกกับพารามิเตอร์ถูกพักไว้ ต้องเลือกสูตรที่ผ่านใหม่ การทดสอบซ้ำยังต้องรอข้อมูล holdout ชุดใหม่ ห้ามวนทดสอบจนบังเอิญผ่าน
+6. การค้นหา 64 ครั้งลองทั้งเกณฑ์เข้า เป้ากำไร ช่วงเว้นซื้อ และสัดส่วนซื้อ/ขาย 25%, 50%, 75%, 100% โดยให้คะแนนผลตอบแทนเฉลี่ยของสองช่วง validation หัก 2 เท่าของ drawdown สูงสุดและความต่างของผลตอบแทนสองช่วง เลือกจาก validation แล้วตรวจ holdout ทีหลัง สัดส่วนซื้อคูณกับวงเงินต่อไม้ที่ถูกจำกัดด้วยเงินใช้ได้ งบ และจำนวนช่องที่เหลือ ส่วนขายคูณกับ SOL ที่ไม่ใช่สำรองของไม้นั้น
+7. การทดสอบขนาดไม้เป็นสถานการณ์จำลองทุน 1,000 USDC สองไม้และสำรอง 20% มีค่า swap/slippage โดยประมาณ ไม่ใช่แบบจำลองค่าธรรมเนียมเครือข่ายทุกขนาดบัญชี ก่อนเตรียมเงินจริงจึงต้องตรวจราคาซื้อขายจริงและค่าเครือข่ายอีกครั้ง หากไม่คุ้มจะรอ การขายทำกำไรต้องผ่านต้นทุนเฉลี่ยของส่วนที่ขายทั้ง USDC และบาทอ้างอิง ส่วนขายเพื่อลดความเสี่ยงอาจขาดทุน
+
+ตัวเลือกซื้อเองยังข้ามสัญญาณ ช่วงเว้นซื้อ และเกณฑ์กำไรคาดการณ์ของโมเดล แต่ข้ามเงินสำรอง วงเงิน และการยืนยัน Phantom ไม่ได้ ไม่มี Q-learning หรือ deep learning; feedback ยังเป็นบันทึกให้ตรวจ ไม่ได้ปรับสูตรอัตโนมัติ
 
 ## รุ่น 0.4.0: ยอด SOL, เหตุผลการเทรด และอัปเดต
 

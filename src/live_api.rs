@@ -45,6 +45,44 @@ fn market_ready(s: &Snapshot) -> Result<u64, String> {
     }
     price_units(s.price).map_err(|e| e.to_string())
 }
+pub fn model_buy_eligibility(s: &Snapshot) -> Result<(), &'static str> {
+    let account = s.real.as_ref().ok_or("Set up the bot wallet first")?;
+    if account.advice_model.is_none() {
+        if let Some(candidate) = &s.research {
+            candidate.live_eligibility()?;
+        }
+    }
+    account.advice_eligibility()?;
+    if account.reserve_bps != 2000 {
+        return Err("ตั้งค่าสำรอง 20/80 และบันทึกต้นทุน SOL เดิมก่อนเปิดเสนอซื้อ");
+    }
+    Ok(())
+}
+
+/// Start monitoring even without an eligible model: existing exits remain
+/// available, but only an evidenced model may enable model-driven buys.
+pub fn start_watch(s: &mut Snapshot) -> Result<(), String> {
+    market_ready(s)?;
+    let a = s.real.as_mut().ok_or("Live account missing")?;
+    if a.pending.is_some() || a.reconciliation_error.is_some() {
+        return Err("จัดการรายการค้างและตรวจยอดบัญชีก่อนเริ่ม".into());
+    }
+    // Only the first model may be selected by Start. Never silently replace
+    // an existing model, including a legacy model without recorded evidence.
+    if a.advice_model.is_none() {
+        if let Some(c) = &s.research {
+            if c.live_eligibility().is_ok() {
+                a.select_advice(c)?;
+            }
+        }
+    }
+    s.live_enabled = model_buy_eligibility(s).is_ok();
+    s.watch.enabled = true;
+    s.watch.error = None;
+    s.watch.notified.clear();
+    Ok(())
+}
+
 pub fn advice(s: &Snapshot) -> Value {
     let Some(account) = s.real.as_ref() else {
         return json!({"action":"setup","reason":"Set up a dedicated funded wallet"});
@@ -60,10 +98,9 @@ pub fn advice(s: &Snapshot) -> Value {
     let net_thb = value_thb as i128 - account.fees_satang as i128;
     let drawdown =
         account.entry_blocked(price) || net_thb * 2 <= account.initial_cost_satang as i128;
-    let exit = account
-        .layers
-        .iter()
-        .find(|l| l.quantity > 0 && (price >= l.target_price || price <= l.review_price));
+    let exit = account.layers.iter().find(|l| {
+        l.tradable_quantity() > 0 && (price >= l.target_price || price <= l.review_price)
+    });
     let (prediction, edge) = match (&account.advice_model, &s.indicators) {
         (Some(m), Some(i)) => {
             let p = m.predict(i.features);
@@ -71,6 +108,7 @@ pub fn advice(s: &Snapshot) -> Value {
         }
         _ => (0.0, 0.0),
     };
+    let model_gate = model_buy_eligibility(s);
     let (action, reason) = if account.pending.is_some() {
         ("pending", "Resolve the current order first")
     } else if drawdown {
@@ -83,13 +121,10 @@ pub fn advice(s: &Snapshot) -> Value {
             "sell",
             "A layer reached its target or review price; a sale still needs your signature",
         )
+    } else if let Err(reason) = model_gate {
+        ("wait", reason)
     } else if !s.live_enabled {
         ("paused", "New buy proposals are paused")
-    } else if account.advice_model.is_none() {
-        (
-            "wait",
-            "Select a research candidate explicitly for live advice",
-        )
     } else if edge > account.advice_policy.min_edge {
         (
             "buy",
@@ -104,7 +139,8 @@ pub fn advice(s: &Snapshot) -> Value {
     json!({"action":action,"reason":reason,"forecast":prediction,"net_edge":edge,"layer_id":exit.map(|l|l.id),
         "equity_usdc":equity,"equity_satang":value_thb,"bot_pnl_usdc":equity as i128-account.initial_usdc as i128-account.fees_usdc as i128,
         "historical_pnl_satang":net_thb-account.initial_cost_satang as i128,
-        "bot_pnl_satang":net_thb-account.initial_reference_satang as i128,"risk_blocked":drawdown})
+        "bot_pnl_satang":net_thb-account.initial_reference_satang as i128,"risk_blocked":drawdown,
+        "model_eligible":model_gate.is_ok(),"model_block_reason":model_gate.err()})
 }
 async fn refresh_live(state: &AppState) -> Result<(), String> {
     crate::api::refresh(state).await?;
@@ -169,19 +205,7 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                 crate::api::research(state).await?;
             }
             let mut e = state.engine.lock().await;
-            market_ready(&e.snapshot)?;
-            let candidate = e.snapshot.research.clone();
-            let a = e.snapshot.real.as_mut().ok_or("Live account missing")?;
-            // This button explicitly selects the first formula. Later research never replaces it silently.
-            if a.advice_model.is_none() {
-                let c = candidate.ok_or("ยังสร้างสูตรไม่ได้ ลองเริ่มใหม่เมื่อข้อมูลพร้อม")?;
-                a.advice_model = Some(c.model);
-                a.advice_policy = c.policy;
-            }
-            e.snapshot.watch.enabled = true;
-            e.snapshot.watch.error = None;
-            e.snapshot.watch.notified.clear();
-            e.snapshot.live_enabled = true;
+            start_watch(&mut e.snapshot)?;
             e.commit("trade_watch_started_by_user")?;
         }
         "live_watch_stop" => {
@@ -211,6 +235,63 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
         }
         "live_refresh" => {
             refresh_live(state).await?;
+        }
+        "live_allocate_80_20" => {
+            let received = if payload["received_sol"]
+                .as_str()
+                .is_none_or(|s| s.trim().is_empty())
+            {
+                0
+            } else {
+                units(payload, "received_sol", 9)?
+            };
+            let source = if payload["source_usdc"]
+                .as_str()
+                .is_none_or(|s| s.trim().is_empty())
+            {
+                0
+            } else {
+                units(payload, "source_usdc", 6)?
+            };
+            {
+                let e = state.engine.lock().await;
+                let a = e
+                    .snapshot
+                    .real
+                    .as_ref()
+                    .ok_or("Set up the bot wallet first")?;
+                if a.pending.is_some()
+                    || a.sol_funding.is_some()
+                    || (a.reserve_bps != 0 && received == 0 && source == 0)
+                {
+                    return Err("มีรายการค้างหรือบันทึก 20/80 ไปแล้ว ยังเปลี่ยนทุนไม่ได้".into());
+                }
+            }
+            refresh_live(state).await?;
+            let mut e = state.engine.lock().await;
+            let price = market_ready(&e.snapshot)?;
+            let atr = price_units(
+                e.snapshot
+                    .indicators
+                    .as_ref()
+                    .ok_or("Wait for current indicators")?
+                    .atr,
+            )
+            .map_err(|err| err.to_string())?;
+            let balances = e
+                .snapshot
+                .real_balances
+                .clone()
+                .ok_or("Refresh wallet balances")?;
+            let rate = e.snapshot.thb_rate.clone().ok_or("Refresh THB reference")?;
+            e.snapshot
+                .real
+                .as_mut()
+                .ok_or("No live account")?
+                .allocate_80_20(&balances, received, source, price, atr, &rate, now())?;
+            e.snapshot.live_enabled = false;
+            e.snapshot.watch.notified.clear();
+            e.commit("original_sol_funding_and_20_80_reserves_recorded")?;
         }
         "live_setup" => {
             let address = {
@@ -289,11 +370,7 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                 .real
                 .as_mut()
                 .ok_or("Set up the bot wallet first")?;
-            if a.pending.is_some() {
-                return Err("Resolve the pending order before changing the advice model".into());
-            }
-            a.advice_model = Some(candidate.model);
-            a.advice_policy = candidate.policy;
+            a.select_advice(&candidate)?;
             e.commit("live_advice_model_selected_by_user")?;
         }
         "live_reinvest" => {
@@ -325,6 +402,22 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
             let side = payload["side"].as_str().ok_or("Choose buy or sell")?;
             if !["buy", "sell"].contains(&side) {
                 return Err("Choose buy or sell".into());
+            }
+            if side == "buy" && payload["manual"] != true {
+                let e = state.engine.lock().await;
+                model_buy_eligibility(&e.snapshot)?;
+            }
+            if side == "buy"
+                && state
+                    .engine
+                    .lock()
+                    .await
+                    .snapshot
+                    .real
+                    .as_ref()
+                    .is_some_and(|a| a.reserve_bps != 2000)
+            {
+                return Err("ตั้งค่าสำรอง 20/80 ก่อนเตรียมซื้อเงินจริง".into());
             }
             let rate = chain::rate(&state.client).await?;
             let (account, input, layer_id, price, target, review, model) = {
@@ -370,13 +463,25 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                     let layer = a
                         .layers
                         .iter()
-                        .find(|l| l.id == id && l.quantity > 0)
+                        .find(|l| l.id == id && l.tradable_quantity() > 0)
                         .ok_or("Open real layer not found")?;
                     let percent = payload["percent"].as_u64().unwrap_or(100);
                     if !(1..=100).contains(&percent) {
                         return Err("Sale percent must be between 1 and 100".into());
                     }
-                    (live::ratio(layer.quantity, percent, 100)?, id)
+                    let quantity = if payload["watch_key"].is_string() {
+                        payload["quantity_sol_atomic"]
+                            .as_u64()
+                            .ok_or("Missing quoted sale quantity")?
+                    } else {
+                        live::ratio(layer.tradable_quantity(), percent, 100)?
+                    };
+                    if quantity == 0 || quantity > layer.tradable_quantity() {
+                        return Err(
+                            "Sale would spend protected SOL or exceed the tradable layer".into(),
+                        );
+                    }
+                    (quantity, id)
                 };
                 let atr = e
                     .snapshot
@@ -424,9 +529,11 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                         .ok_or("ไม่พบไม้ที่ต้องการขาย")?;
                     if !crate::watch::profit_exit_covers_costs(
                         layer,
+                        order.input,
                         order.minimum_output,
                         order.network_fee,
                         price,
+                        &order.rate,
                     ) {
                         return Err(
                             "ถึงราคาเป้าหมายแล้ว แต่ยอดรับขั้นต่ำหลังค่าขายยังไม่เหลือกำไร ระบบจะรอสัญญาณใหม่"
@@ -436,7 +543,13 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                 }
             }
             if side == "buy" && payload["manual"] != true {
+                model_buy_eligibility(&e.snapshot)?;
                 let signal = advice(&e.snapshot);
+                if signal["action"] != "buy" {
+                    return Err(
+                        "Model no longer recommends this buy; review the latest advice".into(),
+                    );
+                }
                 let existing_cost = 2.0
                     * (account.advice_policy.fee_bps + account.advice_policy.slippage_bps) as f64
                     / 10_000.0;
@@ -625,6 +738,27 @@ fn ticket_valid(e: &Engine, request: &TicketRequest) -> Result<(), String> {
         || (order.side == "buy" && !e.snapshot.live_enabled)
     {
         return Err("This approval link expired, was cancelled or has already been used".into());
+    }
+    if order.side == "buy" && order.model != "manual-live" {
+        model_buy_eligibility(&e.snapshot)?;
+        let selected = e
+            .snapshot
+            .real
+            .as_ref()
+            .and_then(|a| a.advice_model.as_ref());
+        if selected.is_none_or(|m| m.version != order.model) {
+            return Err(
+                "The order's model changed; cancel this order and review a new proposal".into(),
+            );
+        }
+    }
+    if order.side == "buy"
+        && e.snapshot
+            .real
+            .as_ref()
+            .is_some_and(|a| a.reserve_bps != 2000)
+    {
+        return Err("ยกเลิกรายการซื้อเก่าและตั้งค่าสำรอง 20/80 ก่อนเตรียมรายการใหม่".into());
     }
     Ok(())
 }

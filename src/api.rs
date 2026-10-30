@@ -36,6 +36,7 @@ impl Engine {
             }
             self.snapshot.running = false;
             self.snapshot.live_enabled = false;
+            self.snapshot.watch.enabled = false;
             self.live_ticket = None;
             return Err(error);
         }
@@ -103,6 +104,7 @@ async fn snapshot(State(state): State<AppState>) -> Json<Value> {
     let e = state.engine.lock().await;
     let mut value = json!(&e.snapshot);
     value["real_advice"] = crate::live_api::advice(&e.snapshot);
+    value["trade_watch"] = crate::watch::view(&e.snapshot, chrono::Utc::now().timestamp());
     Json(value)
 }
 #[derive(Deserialize)]
@@ -479,6 +481,7 @@ async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
                 );
             }
             e.snapshot.running = false;
+            e.snapshot.watch.enabled = false;
             crate::live_api::pause(&mut e);
             e.snapshot.updating = true;
             e.commit("paused_for_update")?;
@@ -491,6 +494,7 @@ async fn dispatch(state: &AppState, cmd: Command) -> Result<Value, String> {
         }
         "shutdown" => {
             e.snapshot.running = false;
+            e.snapshot.watch.enabled = false;
             crate::live_api::pause(&mut e);
             e.commit("service_shutdown")?;
             state.shutdown.notify_one();
@@ -595,6 +599,28 @@ pub async fn background(state: AppState) {
             let has_real = state.engine.lock().await.snapshot.real.is_some();
             if has_real {
                 let _ = crate::live_api::reconcile(&state).await;
+                let address = state
+                    .engine
+                    .lock()
+                    .await
+                    .snapshot
+                    .real
+                    .as_ref()
+                    .map(|a| a.address.clone());
+                if let Some(address) = address {
+                    match crate::chain::balances(&state.client, &address).await {
+                        Ok(balances) => {
+                            let mut e = state.engine.lock().await;
+                            e.snapshot.real_balances = Some(balances);
+                            e.snapshot.watch.error = None;
+                        }
+                        Err(_) => {
+                            state.engine.lock().await.snapshot.watch.error = Some(
+                                "ตรวจยอดกระเป๋าไม่ได้ชั่วคราว ระบบจะลองใหม่และยังไม่เสนอรายการใหม่".into(),
+                            )
+                        }
+                    }
+                }
                 if let Ok(rate) = crate::chain::rate(&state.client).await {
                     let mut e = state.engine.lock().await;
                     e.snapshot.thb_rate = Some(rate);

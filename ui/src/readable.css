@@ -1,0 +1,28 @@
+/* Comfortable desktop reading, including Thai labels and high-DPI displays. */
+body{font-family:"Segoe UI",Tahoma,system-ui,sans-serif;font-size:16px;line-height:1.65}
+.eyebrow,.metric .eyebrow{font-size:14px;letter-spacing:.035em;line-height:1.6}
+.metric-value{font-size:36px;line-height:1.25;font-variant-numeric:tabular-nums}
+.metric p,.metric .muted,.metric-detail,.muted.small,.small{font-size:14px;line-height:1.65}
+.watch-row{gap:24px;padding:15px 0;align-items:flex-start}
+.watch-row span{font-size:16px;max-width:65%}
+.watch-row strong{font-size:18px;text-align:right;font-variant-numeric:tabular-nums}
+.button{font-size:16px;line-height:1.5;padding:12px 18px;min-height:48px}
+.live-field,.live-field input,.live-form-grid label,.live-form-grid input{font-size:16px;line-height:1.6}
+.nav-item{font-size:16px}.source-tag,.paper-badge,.chip,.status-line,.version{font-size:12px;letter-spacing:.025em}
+table{font-size:16px}th{font-size:13px;letter-spacing:.025em}td{font-size:16px}
+.panel h2{font-size:26px}.panel h3{font-size:22px}.panel p{line-height:1.7}
+.trade-watch{border:1px solid #6a8745}.watch-copy{max-width:76ch;font-size:17px}
+.watch-signals{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr));gap:18px;margin:22px 0}
+.signal-card{background:#222d1b;border:1px solid #789c47;border-radius:12px;padding:24px}
+.signal-card.risk{background:#33261b;border-color:#d39959}.signal-card h3{margin:0 0 12px;font-size:24px}
+.signal-card .signal-money{font-size:24px;font-variant-numeric:tabular-nums;margin:14px 0}
+.signal-card .signal-reason{font-size:16px}.signal-card .signal-estimate{font-size:14px;color:#c7ceb9}
+.watch-empty{padding:22px;background:#151c12;border-radius:10px;font-size:18px;margin:18px 0}
+.account-explainer{background:#182016;padding:18px;border-radius:10px;font-size:16px;color:#d3ddc5}
+.account-explainer p{margin:6px 0}.advanced-tools{margin:24px 0;border:1px solid #3a4531;border-radius:10px}
+.advanced-tools summary{padding:18px 22px;font-size:17px;cursor:pointer}.advanced-tools>.panel{border:0;margin:0}
+.read-guide summary{font-size:17px;cursor:pointer;padding:10px 0}.read-guide p{font-size:16px;max-width:85ch}
+.notice{position:fixed;right:24px;bottom:20px;z-index:1000;max-width:min(740px,calc(100vw - 48px));background:#25321e;border:1px solid #8ca56a;border-radius:10px;padding:16px 22px;box-shadow:0 8px 40px #0009;font-size:16px;line-height:1.6}
+.notice-label{font-size:12px;margin-right:12px}.content{padding-bottom:140px}.button:disabled{opacity:.65;cursor:wait}
+@media(max-width:1150px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.watch-row{flex-wrap:wrap}.watch-row span{max-width:100%}}
+@media(max-width:720px){.metrics{grid-template-columns:1fr}.watch-row strong{text-align:left}.metric-value{font-size:32px}}

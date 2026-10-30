@@ -53,19 +53,51 @@ async fn run_action(mut ctx: Context, action: String, payload: Value) {
         return;
     }
     ctx.busy.set(true);
-    ctx.notice
-        .set(format!("Working · {}", action.replace('_', " ")));
+    ctx.notice.set(if action == "live_watch_start" {
+        "กำลังตรวจข้อมูลและเตรียมสูตรเริ่มต้น โปรดรอสักครู่…".into()
+    } else if action == "research" {
+        "กำลังทดสอบสูตรกับข้อมูลย้อนหลัง โปรดรอสักครู่…".into()
+    } else {
+        "กำลังทำรายการ…".into()
+    });
     match invoke("command", json!({"action":action,"payload":payload})).await {
         Ok(_) => {
-            ctx.notice
-                .set("Action completed. Check the account and pending-order status below.".into());
+            ctx.notice.set(
+                match action.as_str() {
+                    "enable_live" => "เปิดเสนอซื้อเพิ่มแล้ว ถ้าสัญญาณยังเป็น wait ระบบจะยังไม่เตรียมซื้อ",
+                    "research" => "ทดสอบสูตรเสร็จแล้ว ดูผลใน Research หรือกดใช้สูตรที่ทดสอบล่าสุด",
+                    "live_use_model" => "เลือกสูตรแนะนำแล้ว ระบบอาจยังให้รอหากโอกาสไม่ผ่านเกณฑ์",
+                    "live_watch_start" => "เริ่มเฝ้าตลาดแล้ว เมื่อมีสัญญาณจะขึ้นการ์ดและแจ้งเตือนให้ตรวจรายการ",
+                    "live_watch_stop" => "หยุดเฝ้าตลาดและพักซื้อเพิ่มแล้ว เหรียญที่ถือยังอยู่ในกระเป๋า",
+                    "live_watch_snooze" => "พักการแจ้งเตือนสัญญาณนี้ 15 นาทีแล้ว ไม่มีการซื้อขาย",
+                    "live_prepare" => "เตรียมคำสั่งแล้ว ตรวจส่วนรายการรอยืนยันและกดเปิด Phantom",
+                    "live_refresh" => "อัปเดตราคา เรตเงินบาท และยอดกระเป๋าแล้ว",
+                    "live_pause" => "พักซื้อเพิ่มแล้ว ยังติดตามเงื่อนไขขายของไม้เดิมเมื่อเปิดเฝ้าตลาดอยู่",
+                    _ => "ทำรายการเสร็จแล้ว ดูสถานะล่าสุดในหน้านี้",
+                }
+                .into(),
+            );
             if let Ok(value) = invoke("snapshot", json!({})).await {
                 ctx.state.set(value);
             }
         }
-        Err(error) => ctx.notice.set(error),
+        Err(error) => ctx
+            .notice
+            .set(format!("ทำรายการไม่ได้: {}", friendly_error(&error))),
     }
     ctx.busy.set(false);
+}
+fn friendly_error(error: &str) -> String {
+    if error.contains("Model recommends waiting") || error.contains("Model forecast does not clear")
+    {
+        "โมเดลยังแนะนำให้รอ โอกาสกำไรยังไม่ผ่านความไม่แน่นอนและต้นทุน จึงยังไม่เตรียมซื้อ".into()
+    } else if error.contains("holdout") || error.contains("new candles") {
+        "ยังไม่มีข้อมูลราคาใหม่พอสำหรับทดสอบสูตรรอบใหม่ ใช้สูตรเดิมเฝ้าต่อได้".into()
+    } else if error.contains("consume the model") {
+        "ราคาจริงและค่าธรรมเนียมกินโอกาสกำไรที่โมเดลประเมินไว้ ระบบจึงไม่เตรียมซื้อ".into()
+    } else {
+        error.into()
+    }
 }
 #[component]
 fn Action(
@@ -75,7 +107,11 @@ fn Action(
     #[props(default=String::from("secondary"))] kind: String,
 ) -> Element {
     let ctx = use_context::<Context>();
-    rsx! {button {class:"button {kind}",disabled:(ctx.busy)(),onclick:move |_|{spawn(run_action(ctx,action.clone(),payload.clone()));},"{label}"}}
+    let mut active = use_signal(|| false);
+    rsx! {button {class:"button {kind}",disabled:(ctx.busy)(),onclick:move |_|{
+        let action=action.clone();let payload=payload.clone();
+        spawn(async move {active.set(true);run_action(ctx,action,payload).await;active.set(false);});
+    },if active(){"กำลังทำงาน…"}else{"{label}"}}}
 }
 #[component]
 fn Metric(
@@ -100,7 +136,13 @@ fn app() -> Element {
         let mut ctx = ctx;
         loop {
             match invoke("snapshot", json!({})).await {
-                Ok(value) => {
+                Ok(mut value) => {
+                    if value["focus_live"] == true
+                        || ((ctx.state)().is_null() && !value["real"].is_null())
+                    {
+                        tab.set("Live trading".into());
+                    }
+                    value["engine_connected"] = json!(true);
                     ctx.state.set(value);
                     if (ctx.notice)().starts_with("Connecting") {
                         ctx.notice
@@ -108,6 +150,10 @@ fn app() -> Element {
                     }
                 }
                 Err(error) => {
+                    ctx.state.with_mut(|v| {
+                        v["engine_connected"] = json!(false);
+                        v["trade_watch"]["signals"] = json!([]);
+                    });
                     ctx.notice.set(format!(
                         "Engine disconnected · {error}. Displayed values may be stale."
                     ));
@@ -127,10 +173,11 @@ fn app() -> Element {
     rsx! {
         style {"{include_str!(\"style.css\")}"}
         style {"{include_str!(\"live.css\")}"}
+        style {"{include_str!(\"readable.css\")}"}
         div {class:"shell",
             aside {class:"sidebar",div {class:"brand",div {class:"brand-mark","C↗"}div {class:"brand-name",div {"CRYPTO"}div {"BROS"}}}div {class:"workspace-label","PERSONAL TRADING LAB"}
                 nav {for (index,name) in ["Overview","Live trading","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
-                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.2.0 · MANUAL APPROVAL"}}
+                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.3.0 · MANUAL APPROVAL"}}
             }
             main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge",if tab()=="Live trading"{"REAL MONEY · PHANTOM"}else if tab()=="Overview"||tab()=="Layers"{"PAPER TRADING"}else{"RESEARCH / ACCOUNT TOOLS"}}}}
                 div {class:"content",
@@ -175,13 +222,13 @@ fn Overview() -> Element {
             }
             section {class:"panel allocation",div {class:"eyebrow","CAPITAL DISCIPLINE"}h2 {"Every dollar\nhas a job."}div {class:"allocation-bar",span {class:"reserve-segment"}span {class:"trading-segment"}}
                 div {class:"allocation-line",span {class:"legend-square reserve"}span {"Reserve"}strong {"40%"}}div {class:"allocation-line",span {class:"legend-square trading"}span {"Trading budget"}strong {"60%"}}
-                div {class:"divider"}div {class:"allocation-line",span {"Parked realized profit"}strong {"{money(parked)}"}}p {class:"muted small","Profit stays parked until you release it. The optimizer cannot access the reserve."}Action {label:"Release parked profit",action:"reinvest"}
+                div {class:"divider"}div {class:"allocation-line",span {"กำไรที่ขายรับมาแล้วและพักไว้"}strong {"{money(parked)}"}}p {class:"muted small","Profit stays parked until you release it. The optimizer cannot access the reserve."}Action {label:"Release parked profit",action:"reinvest"}
             }
         }
         div {class:"bottom-grid",
             section {class:"panel",div {class:"panel-heading",h3 {"Next move"}span {class:"chip","MODEL + RISK CHECK"}}
                 if data["active_model"].is_null(){div {class:"empty",h3 {"An edge needs evidence."}p {"Load candles, run research, then select a model for paper trading. Real accounts have separate controls under Live trading."}}}else{div {class:"model-summary",span {class:"big-label","WAIT / BUY / SELL"}p {"Active: {s(&data[\"active_model\"][\"version\"])}"}p {class:"muted","A forecast must clear uncertainty, costs and risk limits."}}}
-                div {class:"actions",Action {label:"Run model research",action:"research"}Action {label:"Open paper layer",action:"buy"}}
+                div {class:"actions",Action {label:"สร้าง / ทดสอบสูตรใหม่",action:"research"}Action {label:"Open paper layer",action:"buy"}}
             }
             section {class:"panel",div {class:"panel-heading",h3 {"System watch"}span {class:"chip","LOCAL ENGINE"}}
                 div {class:"watch-row",span {"Real-money orders"}strong {"SEPARATE LIVE TAB"}}div {class:"watch-row",span {"Email risk alerts"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}div {class:"watch-row",span {"Weekly target"}strong {"+5% / aspirational"}}
@@ -207,7 +254,7 @@ fn Layers() -> Element {
                     td {strong {"#{n(&layer[\"id\"]) as u64:03}"}div {class:"muted small","{s(&layer[\"model_version\"])}"}}td {"{n(&layer[\"quantity\"])/1e9:.6}"}td {"{money(n(&layer[\"remaining_cost\"])/1e6)}"}
                     td {class:if n(&layer["quantity"])/1e9*price-n(&layer["remaining_cost"])/1e6>=0.0{"positive"}else{"negative"},"{money(n(&layer[\"quantity\"])/1e9*price-n(&layer[\"remaining_cost\"])/1e6)}"}
                     td {"{money(n(&layer[\"target_price\"])/1e6)} / {money(n(&layer[\"review_price\"])/1e6)}"}
-                    td {if n(&layer["quantity"])>0.0{div {class:"actions compact",Action {label:"Sell 50%",action:"sell",payload:json!({"id":layer["id"],"percent":50})}Action {label:"Close",action:"sell",payload:json!({"id":layer["id"],"percent":100})}}}else{span {class:"muted","CLOSED"}}}
+                    td {if n(&layer["quantity"])>0.0{div {class:"actions compact",Action {label:"ขายครึ่งไม้",action:"sell",payload:json!({"id":layer["id"],"percent":50})}Action {label:"Close",action:"sell",payload:json!({"id":layer["id"],"percent":100})}}}else{span {class:"muted","CLOSED"}}}
                 }}}}
             }
         }
@@ -281,6 +328,62 @@ fn LiveField(label: String, mut value: Signal<String>) -> Element {
     rsx! {label {class:"live-field",span {"{label}"}input {r#type:"text",inputmode:"decimal",value:"{value()}",oninput:move |event|value.set(event.value())}}}
 }
 #[component]
+fn TradeWatch() -> Element {
+    let mut ctx = use_context::<Context>();
+    let data = (ctx.state)();
+    let watch = &data["trade_watch"];
+    let enabled = watch["enabled"] == true;
+    let connected = data["engine_connected"] != false;
+    rsx! {
+        section {class:"panel spaced trade-watch",
+            div {class:"panel-heading",h2 {"เฝ้าตลาดให้ แล้วมึงเลือกยืนยัน"}span {class:"chip",if enabled{"กำลังเฝ้า"}else{"ยังไม่เริ่ม"}}}
+            p {class:"watch-copy","ตั้งทุนครั้งเดียวแล้วกดเริ่ม แอปเตรียมสูตรเริ่มต้นและตรวจตลาดทุกประมาณ 1 นาที เมื่อเข้าเกณฑ์ซื้อหรือขายจะแจ้งเตือนให้กดตรวจรายการ ไม่ต้องกรอกจำนวนเองทุกไม้"}
+            div {class:"actions",
+                if enabled {Action {label:"หยุดเฝ้าตลาด",action:"live_watch_stop"}}
+                else {Action {label:"เริ่มเฝ้าตลาด",action:"live_watch_start",kind:"primary"}}
+                if enabled && data["live_enabled"]!=true && data["real_advice"]["risk_blocked"]!=true && data["real"]["pending"].is_null(){Action {label:"กลับมาเฝ้าทั้งซื้อและขาย",action:"live_watch_start",kind:"primary"}}
+                button {class:"button secondary",onclick:move |_|{spawn(async move {
+                    ctx.notice.set(match invoke("test_notification",json!({})).await {Ok(_)=>"ส่งคำขอแจ้งเตือนทดสอบแล้ว ถ้าเห็นข้อความ กดเพื่อกลับหน้านี้ ไม่มีการซื้อขาย".into(),Err(e)=>e});
+                });},"ทดสอบแจ้งเตือน"}
+            }
+            p {class:"muted small","{s(&data[\"notification_status\"])}"}
+            p {class:"watch-copy","วงเงินสูงสุดต่อไม้ {money(n(&data[\"real\"][\"config\"][\"max_buy\"])/1e6)} USDC ระบบจะลดจำนวนลงตามเงินที่ใช้ได้และจำนวนไม้ที่เหลือ"}
+            if !connected {p {class:"warning","ขาดการเชื่อมต่อกับตัวเฝ้าตลาด ข้อมูลอาจเก่า กรุณาเปิดแอปใหม่ก่อนทำรายการ"}}
+            else if items(&watch["signals"]).is_empty(){div {class:"watch-empty","{s(&watch[\"message\"])}"}}
+            div {class:"watch-signals",for signal in items(&watch["signals"]) {
+                {
+                    let key=s(&signal["key"]).to_owned();
+                    let skip_key=key.clone();
+                    let is_buy=signal["side"]=="buy";
+                    rsx!{article {class:if signal["risk"]==true{"signal-card risk"}else{"signal-card"},
+                        h3 {"{s(&signal[\"title\"])}"}
+                        p {class:"signal-reason","{s(&signal[\"reason\"])}"}
+                        p {class:"signal-money",if is_buy {"ใช้ {money(n(&signal[\"amount_usdc\"])/1e6)} USDC · ประมาณ ฿{money(n(&signal[\"value_satang\"])/100.0)}"}
+                            else {"ขาย SOL ของไม้ #{n(&signal[\"layer_id\"]) as u64} ทั้งหมด ({n(&signal[\"quantity_sol\"])/1e9:.6} SOL)"}}
+                        if !is_buy {p {"ผลกำไร/ขาดทุน ณ ราคาอ้างอิง: {money(n(&signal[\"pnl_usdc\"])/1e6)} USDC / ฿{money(n(&signal[\"pnl_satang\"])/100.0)}"}}
+                        p {class:"signal-estimate","ตัวเลขยังเป็นประมาณการก่อนค่าใช้จ่ายขาออก กดแล้วจะตรวจราคาจริงใหม่ หากสัญญาณเปลี่ยนจะไม่เตรียมคำสั่ง"}
+                        div {class:"actions",
+                            button {class:"button primary",disabled:(ctx.busy)()||!connected,onclick:move |_|{
+                                let key=key.clone();
+                                spawn(async move {
+                                    if (ctx.busy)(){return;}
+                                    ctx.busy.set(true);ctx.notice.set("กำลังตรวจสัญญาณ ราคา และวงเงินล่าสุด…".into());
+                                    ctx.notice.set(match invoke("review_watch_order",json!({"key":key})).await {
+                                        Ok(_)=>"เปิดหน้าตรวจรายการแล้ว ตรวจยอดและยืนยันใน Phantom ด้วยตัวเอง".into(),Err(e)=>e});
+                                    if let Ok(value)=invoke("snapshot",json!({})).await{ctx.state.set(value);}
+                                    ctx.busy.set(false);
+                                });
+                            },"{s(&signal[\"button\"])}"}
+                            Action {label:"เตือนอีกทีใน 15 นาที",action:"live_watch_snooze",payload:json!({"key":skip_key})}
+                        }
+                    }}
+                }
+            }}
+            p {class:"muted small","การกดแจ้งเตือนเปิดแอปเท่านั้น ทุกการซื้อและขายต้องเซ็นใน Phantom • คอมต้องเปิดและไม่หลับ • Windows อาจซ่อนแจ้งเตือนเมื่อเปิดห้ามรบกวน"}
+        }
+    }
+}
+#[component]
 fn LiveTrading() -> Element {
     let mut ctx = use_context::<Context>();
     let data = (ctx.state)();
@@ -311,7 +414,7 @@ fn LiveTrading() -> Element {
         }
     };
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","REAL WALLET · YOUR SIGNATURE"}h1 {"Trade with a clear limit."}p {"USDC ↔ SOL · two layers · every order approved in Phantom"}}div {class:"actions",Action {label:"Refresh prices, FX & wallet",action:"live_refresh"}Action {label:"Pause new buys",action:"live_pause"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","REAL WALLET · YOUR SIGNATURE"}h1 {"เฝ้าให้ มึงยืนยันเอง"}p {"USDC ↔ SOL · แบ่งได้ 2 ไม้ · ยืนยันซื้อขายใน Phantom ทุกครั้ง"}}div {class:"actions",Action {label:"รีเฟรชราคา เรตบาท และยอดกระเป๋า",action:"live_refresh"}Action {label:"พักซื้อเพิ่ม",action:"live_pause"}}}
         if data["wallet"].is_null(){section {class:"panel",h2 {"1. Connect your dedicated bot wallet"}p {"Select the wallet funded for this bot in Phantom. Keep your main reserve in your other wallet."}
             button {class:"button primary",disabled:(ctx.busy)(),onclick:move |_|{spawn(async move{match invoke("connect_wallet",json!({})).await{Ok(_)=>ctx.notice.set("Choose the bot wallet in Phantom, then return here.".into()),Err(error)=>ctx.notice.set(error)}});},"Connect Phantom in browser ↗"}
         }}else{p {class:"wallet-address muted small","Bot wallet: {s(&data[\"wallet\"][\"address\"])}"}}
@@ -325,45 +428,49 @@ fn LiveTrading() -> Element {
                 Action {label:"Record funding · keep trading paused",action:"live_setup",kind:"primary",payload:json!({"source_thb":source_thb(),"source_usdc":source_usdc(),"received_usdc":received(),"budget_usdc":budget(),"max_buy_usdc":max_buy(),"reserve_usdc":reserve(),"fees_included":fees_included()})}
             }
         }else{
-            div {class:"metrics",Metric {label:"BOT EQUITY · USDC",value:metric("equity_usdc",1e6,""),detail:"Tracked USDC and open SOL at reference price",accent:true}Metric {label:"CURRENT VALUE · THB",value:metric("equity_satang",100.0,"฿"),detail:"USDC/THB reference, not a guaranteed cash-out rate"}Metric {label:"BOT P&L · USDC",value:metric("bot_pnl_usdc",1e6,""),detail:"Since onboarding, after recorded network costs"}Metric {label:"P&L VS ORIGINAL THB COST",value:metric("historical_pnl_satang",100.0,"฿"),detail:"Includes allocated prior price and FX changes"}}
-            section {class:"panel spaced",div {class:"panel-heading",h2 {"Capital and valuation"}span {class:"chip",if data["live_enabled"]==true{"BUYS ENABLED · MANUAL SIGNING"}else{"NEW BUYS PAUSED"}}}
-                div {class:"watch-row",span {"Original allocated cost"}strong {"฿{money(n(&account[\"initial_cost_satang\"])/100.0)}"}}
-                div {class:"watch-row",span {"Bot P&L in baht since onboarding"}strong {"{metric(\"bot_pnl_satang\",100.0,\"฿\")}"}}
-                div {class:"watch-row",span {"Tracked USDC cash / protected reserve"}strong {"{n(&account[\"cash\"])/1e6:.6} / {n(&account[\"config\"][\"reserve\"])/1e6:.6}"}}
-                div {class:"watch-row",span {"Maximum active investment / per buy"}strong {"{money(n(&account[\"config\"][\"trading_budget\"])/1e6)} / {money(n(&account[\"config\"][\"max_buy\"])/1e6)} USDC"}}
-                div {class:"watch-row",span {"Last checked on-chain USDC / native SOL"}strong {"{n(&data[\"real_balances\"][\"usdc\"])/1e6:.6} / {n(&data[\"real_balances\"][\"sol\"])/1e9:.6}"}}
-                div {class:"watch-row",span {"USDC/THB reference"}strong {"฿{n(&data[\"thb_rate\"][\"micros\"])/1e6:.4}"}}
-                p {class:"muted small","Coinbase reference fetched by the app; actual sale-to-baht proceeds may differ. Network costs are recorded separately from recoverable account rent. Refresh after transfers. External deposits do not automatically enlarge the bot's budget."}
-                if account["funding_fees_included"]!=true{p {class:"warning small","Original funding fees were not confirmed as included. Historical baht P&L may omit those costs."}}
-                div {class:"watch-row",span {"Parked realized profit"}strong {"{money(n(&account[\"parked_profit\"])/1e6)} USDC"}}Action {label:"Release profit within existing limits",action:"live_reinvest"}
+            TradeWatch{}
+            div {class:"metrics",Metric {label:"มูลค่าทุนบอต · USDC",value:metric("equity_usdc",1e6,""),detail:"USDC ในบัญชีบอต + มูลค่า SOL ที่บอตซื้อไว้",accent:true}Metric {label:"ทุนบอตคิดเป็นเงินบาท",value:metric("equity_satang",100.0,"฿"),detail:"คำนวณตามเรตอ้างอิง ยังไม่ใช่ยอดถอนเข้าธนาคาร"}Metric {label:"ผลกำไร / ขาดทุนจากบอต · USDC",value:metric("bot_pnl_usdc",1e6,""),detail:"ตั้งแต่เริ่มใช้บอต หลังหักค่าเครือข่ายที่บันทึกแล้ว"}Metric {label:"ผลเทียบเงินต้นเดิม · บาท",value:metric("historical_pnl_satang",100.0,"฿"),detail:"รวมผลราคาและเรตเงินตั้งแต่ก่อนเริ่มใช้บอต"}}
+            section {class:"panel spaced",div {class:"panel-heading",h2 {"ทุน เงินสำรอง และค่าเงินบาท"}span {class:"chip",if data["live_enabled"]==true{"เปิดเสนอซื้อ · มึงเซ็นทุกไม้"}else{"พักการซื้อเพิ่ม"}}}
+                div {class:"watch-row",span {"เงินต้นเดิมที่แบ่งให้บอต (บาท)"}strong {"฿{money(n(&account[\"initial_cost_satang\"])/100.0)}"}}
+                div {class:"watch-row",span {"ผลตั้งแต่เริ่มบอต (บาท รวมผลของเรตเงิน)"}strong {"{metric(\"bot_pnl_satang\",100.0,\"฿\")}"}}
+                div {class:"watch-row",span {"USDC ตามบัญชีบอต / ส่วนที่กันไว้ไม่ใช้"}strong {"{n(&account[\"cash\"])/1e6:.6} / {n(&account[\"config\"][\"reserve\"])/1e6:.6}"}}
+                div {class:"watch-row",span {"เพดานเงินลงทุน / สูงสุดต่อไม้"}strong {"{money(n(&account[\"config\"][\"trading_budget\"])/1e6)} / {money(n(&account[\"config\"][\"max_buy\"])/1e6)} USDC"}}
+                div {class:"watch-row",span {"ยอดจริงในกระเป๋า: USDC / SOL (รวม SOL ที่เติมแยก)"}strong {"{n(&data[\"real_balances\"][\"usdc\"])/1e6:.6} / {n(&data[\"real_balances\"][\"sol\"])/1e9:.6}"}}
+                div {class:"watch-row",span {"เรตอ้างอิง: บาทต่อ 1 USDC"}strong {"฿{n(&data[\"thb_rate\"][\"micros\"])/1e6:.4}"}}
+                p {class:"muted small","เรตจาก Coinbase ใช้ประเมินมูลค่า ยอดถอนจริงอาจต่างกัน ทุนบอตไม่รวม SOL ที่มีอยู่เดิมหรือเติมไว้จ่ายค่าธรรมเนียม การเติมเงินเพิ่มไม่ได้เพิ่มวงเงินบอตอัตโนมัติ"}
+                if account["funding_fees_included"]!=true{p {class:"warning small","ยังไม่ได้ยืนยันว่าเงินต้นรวมค่าซื้อและโอนครบ ผลเทียบเงินต้นเดิมอาจยังไม่รวมค่าใช้จ่ายเหล่านี้"}}
+                div {class:"watch-row",span {"กำไรที่ขายรับมาแล้วและพักไว้"}strong {"{money(n(&account[\"parked_profit\"])/1e6)} USDC"}}Action {label:"นำกำไรกลับมาใช้ ภายในวงเงินเดิม",action:"live_reinvest"}
             }
+            details {class:"panel spaced read-guide",summary {"วิธีอ่านตัวเลขในหน้านี้"} p {"มูลค่าทุนบอต: นับ USDC ที่บันทึกให้บอต และ SOL ที่ซื้อผ่านบอต ยังไม่รวม SOL เดิมที่เติมไว้จ่ายค่าเครือข่าย"} p {"ผลจากบอตเป็น USDC: ใช้ดูว่าตั้งแต่เริ่มบอต เงินเพิ่มหรือลดเท่าไร รวมกำไร/ขาดทุนของไม้ที่ยังถือและค่าเครือข่ายที่บันทึกแล้ว"} p {"ผลจากบอตเป็นบาท: รวมผลของเรต USDC/THB ด้วย จึงขยับได้แม้ยังไม่ได้ซื้อขาย"} p {"ผลเทียบเงินต้นเดิม: เทียบกับต้นทุนเงินบาทที่แบ่งมาจากการซื้อเดิม รวมผลก่อนเริ่มบอตด้วย ตัวเลขติดลบตรงนี้อย่างเดียวไม่ได้แปลว่าบอตเทรดขาดทุน"} p {"เงินสำรอง: เงินในกระเป๋าบอตที่แอปกันไม่ให้ใช้ซื้อ กำไรที่พักไว้จะไม่ถูกนำมาซื้อจนกดอนุญาต และยังอยู่ในวงเงินเดิม"}}
             if pending.is_null(){
+                details {class:"advanced-tools",summary {"เครื่องมือขั้นสูง: ดูสูตร หรือเตรียมคำสั่งเอง"}
                 section {class:"panel spaced",div {class:"panel-heading",h2 {"Next move: {s(&advice[\"action\"])}"}span {class:"chip","ADVICE ≠ AN EXECUTED ORDER"}}p {"{s(&advice[\"reason\"])}"}
-                    div {class:"actions",Action {label:"Enable manually approved buys",action:"enable_live"}Action {label:"Run model research",action:"research"}Action {label:"Use candidate for live advice",action:"live_use_model"}}
+                    div {class:"actions",Action {label:"เปิดให้เสนอซื้อเพิ่ม",action:"enable_live"}Action {label:"สร้าง / ทดสอบสูตรใหม่",action:"research"}Action {label:"ใช้สูตรที่ทดสอบล่าสุด",action:"live_use_model"}}
                     p {class:"muted small","An explicitly selected research model uses RSI, MACD and other features. Optimization cannot change your reserve or trade limits. A 5% weekly return is a target, not a promise."}
-                    LiveField {label:"Buy amount · USDC",value:amount}
-                    div {class:"actions",Action {label:"Prepare model buy",action:"live_prepare",kind:"primary",payload:json!({"side":"buy","amount_usdc":amount()})}Action {label:"Prepare manual test buy",action:"live_prepare",payload:json!({"side":"buy","amount_usdc":amount(),"manual":true})}}
-                    p {class:"muted small","Manual test buy bypasses the model signal only. All spending, reserve and loss limits still apply. Preparing an order does not sign or submit it."}
+                    LiveField {label:"เงินที่ใช้ซื้อครั้งนี้ · USDC",value:amount}
+                    div {class:"actions",Action {label:"เตรียมซื้อเมื่อผ่านโมเดล",action:"live_prepare",kind:"primary",payload:json!({"side":"buy","amount_usdc":amount()})}Action {label:"ซื้อเองด้วยเงินจริง (ข้ามโมเดล)",action:"live_prepare",payload:json!({"side":"buy","amount_usdc":amount(),"manual":true})}}
+                    p {class:"muted small","ปุ่มซื้อเองใช้เงินจริงและข้ามเฉพาะสัญญาณโมเดล ยังตรวจวงเงินและความเสี่ยง กดเตรียมแล้วยังต้องเซ็นใน Phantom"}
+                }
                 }
             }else{
                 section {class:"panel spaced live-order",div {class:"eyebrow","PENDING REAL ORDER"}h2 {"{s(&pending[\"side\"])} · {s(&pending[\"status\"])}"}
                     p {"Spend {spend_amount:.6} {spend_unit}"}
                     p {"Minimum receipt: {receive_amount:.6} {receive_unit}"}
                     p {"Estimated network fee: {n(&pending[\"network_fee\"])/1e9:.9} SOL"}
-                    if pending["signature"].is_null(){div {class:"actions",button {class:"button primary",disabled:(ctx.busy)(),onclick:move |_|{spawn(async move{match invoke("open_live_order",json!({})).await{Ok(_)=>ctx.notice.set("Approval page opened. Check the wallet and amounts before signing in Phantom.".into()),Err(error)=>ctx.notice.set(error)}});},"Review and approve in Phantom ↗"}Action {label:"Cancel unsigned order",action:"live_cancel"}}}
-                    else{p {class:"wallet-address","Signature: {s(&pending[\"signature\"])}"}p {"Waiting for finalized chain confirmation. Do not repeat the trade in another window."}Action {label:"Reconcile transaction now",action:"live_reconcile"}}
+                    if pending["signature"].is_null(){div {class:"actions",button {class:"button primary",disabled:(ctx.busy)(),onclick:move |_|{spawn(async move{match invoke("open_live_order",json!({})).await{Ok(_)=>ctx.notice.set("Approval page opened. Check the wallet and amounts before signing in Phantom.".into()),Err(error)=>ctx.notice.set(error)}});},"ตรวจรายการและยืนยันใน Phantom ↗"}Action {label:"ยกเลิกรายการที่ยังไม่เซ็น",action:"live_cancel"}}}
+                    else{p {class:"wallet-address","Signature: {s(&pending[\"signature\"])}"}p {"รอเครือข่ายยืนยัน อย่าส่งรายการเดิมซ้ำในหน้าต่างอื่น"}Action {label:"ตรวจผลคำสั่งเดิมอีกครั้ง",action:"live_reconcile"}}
                     if pending["message"].is_string(){p {class:"warning","{s(&pending[\"message\"])}"}}
                 }
             }
             if account["reconciliation_error"].is_string(){p {class:"warning","{s(&account[\"reconciliation_error\"])}"}}
-            section {class:"panel spaced",h2 {"Real SOL layers"}p {class:"muted small","Unrealized P&L includes allocated entry network costs; future exit costs are not yet known."}table {thead {tr {th {"LAYER / OPENED"}th {"SOL"}th {"COST · USDC / THB"}th {"UNREALIZED · USDC / THB"}th {"TARGET / REVIEW · USDC"}th {"PREPARE EXIT"}}}tbody {for layer in items(&account["layers"]){tr {
+            section {class:"panel spaced",h2 {"SOL ที่ถือ แยกตามไม้ที่ซื้อ"}p {class:"muted small","Unrealized P&L includes allocated entry network costs; future exit costs are not yet known."}table {thead {tr {th {"LAYER / OPENED"}th {"SOL"}th {"COST · USDC / THB"}th {"UNREALIZED · USDC / THB"}th {"TARGET / REVIEW · USDC"}th {"PREPARE EXIT"}}}tbody {for layer in items(&account["layers"]){tr {
                 td {"#{n(&layer[\"id\"]) as u64}" div {class:"muted small","{local_time(n(&layer[\"opened_at\"]))}"}}td {"{n(&layer[\"quantity\"])/1e9:.9}"}td {"{money(n(&layer[\"cost_usdc\"])/1e6)} / ฿{money(n(&layer[\"cost_satang\"])/100.0)}"}
                 td {if advice["equity_usdc"].is_number(){"{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])-(n(&layer[\"cost_usdc\"])+n(&layer[\"entry_fee_usdc\"]))/1e6)} / ฿{money(n(&layer[\"quantity\"])/1e9*n(&data[\"price\"])*n(&data[\"thb_rate\"][\"micros\"])/1e6-(n(&layer[\"cost_satang\"])+n(&layer[\"entry_fee_satang\"]))/100.0)}"}else{"—"}}
                 td {"{money(n(&layer[\"target_price\"])/1e6)} / {money(n(&layer[\"review_price\"])/1e6)}"}
-                td {if n(&layer["quantity"])>0.0&&pending.is_null(){div {class:"actions compact",Action {label:"Sell 50%",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":50})}Action {label:"Close layer",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":100})}}}}
+                td {if n(&layer["quantity"])>0.0&&pending.is_null(){div {class:"actions compact",Action {label:"ขายครึ่งไม้",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":50})}Action {label:"ขายทั้งหมดของไม้นี้",action:"live_prepare",payload:json!({"side":"sell","layer_id":layer["id"],"percent":100})}}}}
             }}}}}
-            section {class:"panel spaced",h2 {"Confirmed chain journal"}p {class:"muted small","Only finalized transactions appear here. Realized P&L below excludes separately recorded network costs; the account totals above include them."}
-                if items(&account["fills"]).is_empty(){p {"No finalized transactions recorded yet."}}
+            section {class:"panel spaced",h2 {"ประวัติซื้อขายที่เครือข่ายยืนยันแล้ว"}p {class:"muted small","Only finalized transactions appear here. Realized P&L below excludes separately recorded network costs; the account totals above include them."}
+                if items(&account["fills"]).is_empty(){p {"ยังไม่มีรายการซื้อขายที่ยืนยันแล้ว"}}
                 for fill in items(&account["fills"]).into_iter().rev().take(30){div {class:"real-fill",strong {"{s(&fill[\"side\"])} · layer #{n(&fill[\"layer_id\"]) as u64}"}p {"Realized: {money(n(&fill[\"realized_usdc\"])/1e6)} USDC / ฿{money(n(&fill[\"realized_satang\"])/100.0)} · network fee {n(&fill[\"network_fee_lamports\"])/1e9:.9} SOL"}p {class:"wallet-address muted small","{s(&fill[\"signature\"])}"}}}
             }
             section {class:"panel spaced",h3 {"Risk watch"}p {"New buys pause at a layer review price, 10% loss against starting bot capital, or 50% loss against allocated historical baht cost. A review never guarantees an automatic sale."}
@@ -379,7 +486,7 @@ fn Settings() -> Element {
     let data = (ctx.state)();
     let mut update = use_signal(|| Value::Null);
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.2.0 · manually approved trading"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.3.0 · manually approved trading"}}}
         div {class:"bottom-grid",
             section {class:"panel",h2 {"Application updates"}p {"Signed releases update the app while preserving your portfolio. The engine pauses and the database is backed up first."}
                 button {class:"button primary",onclick:move |_|{spawn(async move {match invoke("check_update",json!({})).await{Ok(v)=>{ctx.notice.set(s(&v["message"]).to_string());update.set(v);},Err(e)=>ctx.notice.set(e)}});},"Check for updates"}

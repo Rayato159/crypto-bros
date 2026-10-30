@@ -6,6 +6,7 @@ pub mod market;
 pub mod solana_wire;
 pub mod state;
 pub mod storage;
+pub mod watch;
 
 pub fn data_directory() -> Result<std::path::PathBuf, String> {
     directories::ProjectDirs::from("dev", "CryptoBros", "CryptoBros")

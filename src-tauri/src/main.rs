@@ -1,12 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tauri::{
     Manager,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -20,6 +28,8 @@ struct Backend {
     client: reqwest::Client,
     data_dir: PathBuf,
     startup_error: Option<String>,
+    focus_live: AtomicBool,
+    notification_status: Mutex<String>,
 }
 impl Backend {
     fn connection(&self) -> Result<ConnectionInfo, String> {
@@ -78,7 +88,16 @@ impl Backend {
 }
 #[tauri::command]
 async fn snapshot(backend: tauri::State<'_, Backend>) -> Result<Value, String> {
-    backend.state().await
+    let mut value = backend.state().await?;
+    value["focus_live"] = json!(backend.focus_live.swap(false, Ordering::Relaxed));
+    value["notification_status"] = json!(
+        backend
+            .notification_status
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default()
+    );
+    Ok(value)
 }
 #[tauri::command]
 async fn command(
@@ -112,12 +131,82 @@ async fn command(
         "live_cancel",
         "live_prepare",
         "live_reconcile",
+        "live_watch_start",
+        "live_watch_stop",
+        "live_watch_snooze",
     ]
     .contains(&action.as_str())
     {
         return Err("Command is not available from the dashboard".into());
     }
     backend.command(&action, payload).await
+}
+#[tauri::command]
+async fn review_watch_order(
+    app: tauri::AppHandle,
+    backend: tauri::State<'_, Backend>,
+    key: String,
+) -> Result<(), String> {
+    backend
+        .command("live_watch_prepare", json!({"key":key}))
+        .await?;
+    open_live_order(app, backend).await
+}
+#[tauri::command]
+fn test_notification(app: tauri::AppHandle) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title("Crypto Bros · ทดสอบแจ้งเตือน")
+        .body("นี่คือการทดสอบเท่านั้น ไม่มีคำสั่งซื้อขาย กดที่ข้อความนี้เพื่อเปิดหน้าเฝ้าตลาด")
+        .show()
+        .map_err(|_| "ส่งคำแจ้งเตือนไม่ได้ ตรวจการตั้งค่าแจ้งเตือนของ Windows".to_string())
+}
+fn focus_live(app: &tauri::AppHandle) {
+    app.state::<Backend>()
+        .focus_live
+        .store(true, Ordering::Relaxed);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+fn start_notifications(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let backend = app.state::<Backend>();
+            let Ok(response) = backend.command("live_watch_claim", json!({})).await else {
+                continue;
+            };
+            let signal = &response["signal"];
+            let Some(title) = signal["title"].as_str() else {
+                continue;
+            };
+            let body = format!(
+                "{} · กดเปิดแอปเพื่อตรวจราคาปัจจุบันและยืนยันใน Phantom",
+                signal["reason"].as_str().unwrap_or("มีรายการให้ตรวจสอบ")
+            );
+            let result = app
+                .notification()
+                .builder()
+                .title(format!("Crypto Bros · {title}"))
+                .body(body)
+                .show();
+            if let Ok(mut status) = backend.notification_status.lock() {
+                *status = if result.is_ok() {
+                    "ส่งคำแจ้งเตือนไปยัง Windows แล้ว; โหมดห้ามรบกวนอาจซ่อนข้อความ"
+                } else {
+                    "ส่งคำแจ้งเตือนไม่สำเร็จ ดูรายการในแอปและตรวจการตั้งค่า Windows"
+                }
+                .into();
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ =
+                    window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+            }
+        }
+    });
 }
 #[tauri::command]
 async fn connect_wallet(
@@ -291,6 +380,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = data_dir()?;
             crypto_bros_core::privacy::protect_directory(&dir)?;
@@ -301,11 +391,17 @@ fn main() {
                     .build()?,
                 data_dir: dir.clone(),
                 startup_error: None,
+                focus_live: AtomicBool::new(false),
+                notification_status: Mutex::new("กดทดสอบแจ้งเตือนก่อนซ่อนแอปไว้ในถาดระบบ".into()),
             };
             if let Err(error) = ensure_worker(app.handle(), &dir, &backend) {
                 backend.startup_error = Some(error);
             }
             app.manage(backend);
+            let notification_app = app.handle().clone();
+            app.notification()
+                .on_action(move |_| focus_live(&notification_app))?;
+            start_notifications(app.handle().clone());
             let open = MenuItem::with_id(app, "open", "Open Crypto Bros", true, None::<&str>)?;
             let pause = MenuItem::with_id(
                 app,
@@ -317,7 +413,7 @@ fn main() {
             let quit = MenuItem::with_id(app, "quit", "Stop bot and quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &pause, &quit])?;
             let mut tray = TrayIconBuilder::new()
-                .tooltip("Crypto Bros · Paper trading")
+                .tooltip("Crypto Bros · เฝ้าสัญญาณ / ยืนยันทุกไม้ใน Phantom")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
@@ -371,6 +467,8 @@ fn main() {
             command,
             connect_wallet,
             open_live_order,
+            review_watch_order,
+            test_notification,
             check_update,
             install_update
         ])

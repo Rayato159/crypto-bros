@@ -28,6 +28,7 @@ impl Store {
                 s.app_version = env!("CARGO_PKG_VERSION").into();
                 s.optimizing = false;
                 s.live_enabled = false;
+                s.watch.enabled = false;
                 s.updating = false;
                 Ok(s)
             }

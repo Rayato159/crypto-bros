@@ -2,14 +2,42 @@
 
 Rust desktop workstation for SOL/USDC research, paper trading and **individually approved real trades**. Dioxus Web runs inside Tauri; the Rust worker keeps running independently of the window. SQLite keeps separate paper and real ledgers, models and feedback locally.
 
-**0.2.0 prepares real Jupiter swaps and requires your Phantom signature for every order.** Paper mode remains the default; real funding and limits must be configured explicitly. A +5% weekly return is a goal, not a guaranteed return or a reason to relax risk limits. Building and testing this app does not establish profitability or prove a user's mainnet execution.
+**0.3.0 adds a one-button trade watch, Windows notifications and a larger Thai live-account interface.** Every real Jupiter swap still requires your Phantom signature. Paper mode remains the default; real funding and limits must be configured explicitly. A +5% weekly return is a goal, not a guaranteed return or a reason to relax risk limits. Building and testing this app does not establish profitability or prove a user's mainnet execution.
+
+## เฝ้าตลาดแบบไม่ต้องไล่กดหลายปุ่ม
+
+หลังเชื่อม Phantom และบันทึกทุนใน **Live trading** กด **เริ่มเฝ้าตลาด** ครั้งเดียว แอปจะรีเฟรชข้อมูล เตรียมและเลือกสูตรเริ่มต้นหากยังไม่มี แล้วตรวจตลาดประมาณทุกนาที สูตรที่ใช้อยู่จะไม่ถูกแทนที่อัตโนมัติเมื่อมีผลวิจัยรอบใหม่
+
+- กด **ทดสอบแจ้งเตือน** ก่อนซ่อนแอปไว้ในถาดระบบ คอมต้องเปิดและไม่หลับ Windows อาจซ่อนข้อความเมื่อปิดแจ้งเตือนหรือเปิดห้ามรบกวน
+- เมื่อโมเดลผ่านเกณฑ์ซื้อ การ์ดจะแสดงจำนวนที่แบ่งจากวงเงินและจำนวนไม้ที่เหลือ โดยไม่ใช้เงินสำรองหรือกำไรที่ยังพักไว้
+- เมื่อถึงราคาเป้าหมายหรือจุดทบทวนความเสี่ยง การ์ดจะเสนอให้ตรวจการขายไม้ที่เกี่ยวข้อง การขายทั้งหมดหมายถึงทั้งหมดของไม้นั้น ไม่ใช่ทุกเหรียญในกระเป๋า
+- กดแจ้งเตือนเพื่อเปิดแอป แล้วกด **ตรวจราคาซื้อ → Phantom** หรือ **ตรวจราคาขาย → Phantom** ระบบจะตรวจสัญญาณ ราคา วงเงิน และธุรกรรมใหม่ ก่อนเปิดหน้าที่ให้มึงตรวจและเซ็นเอง หากสัญญาณหายหรือราคา/ต้นทุนไม่ผ่าน จะบอกเหตุผลและไม่เตรียมรายการ
+- คำแจ้งเตือนเดิมเว้นอย่างน้อย 15 นาที ปุ่ม **เตือนอีกทีใน 15 นาที** พักเฉพาะสัญญาณนั้น การถึงจุดความเสี่ยงยังบล็อกการซื้อเพิ่ม
+- **พักซื้อเพิ่ม** ยังเฝ้าเงื่อนไขขายอยู่ ส่วน **หยุดเฝ้าตลาด** หยุดแจ้งสัญญาณและพักซื้อเพิ่ม การหยุดทั้งสองแบบไม่ได้ขายเหรียญที่ถือให้เอง เปิดแอปใหม่ต้องกดเริ่มเฝ้าอีกครั้ง
+- รอรายการเข้า **ประวัติซื้อขายที่เครือข่ายยืนยันแล้ว** หากยังค้าง ให้ตรวจผลคำสั่งเดิม อย่าส่งซ้ำในหน้าต่างอื่น
+
+ตัวเลขในการ์ดใช้ราคาอ้างอิงและยังไม่ใช่ราคาที่รับประกัน โดยเฉพาะผลกำไร/ขาดทุนก่อนค่าขายจริง กดตรวจรายการแล้วจึงได้ราคาและค่าธรรมเนียมล่าสุด Windows รายงานการกดแจ้งเตือนผ่านปลั๊กอินได้ขณะ toast ยังแสดงอยู่; หากข้อความเก่าในศูนย์แจ้งเตือนไม่เปิดแอป ให้เปิด Crypto Bros จากถาดระบบแทน ([Tauri notification behavior](https://docs.rs/tauri-plugin-notification/latest/tauri_plugin_notification/struct.NotificationBuilder.html)).
+
+## อ่านตัวเลขที่จำเป็น
+
+| ตัวเลข | ความหมาย |
+|---|---|
+| มูลค่าทุนบอต · USDC | USDC ที่บันทึกให้บอต รวมมูลค่า SOL ที่ซื้อผ่านบอต ส่วน SOL เดิมหรือที่เติมจ่ายค่าเครือข่ายแสดงแยกและไม่รวมในทุนนี้ |
+| ทุนบอตคิดเป็นเงินบาท | มูลค่าทุนบอตแปลงด้วยเรต USDC/THB อ้างอิง ยอดถอนเข้าธนาคารอาจต่างกัน |
+| ผลกำไร/ขาดทุนจากบอต · USDC | ผลตั้งแต่เริ่มบอต รวมไม้ที่ยังถือและค่าเครือข่ายที่บันทึกแล้ว |
+| ผลตั้งแต่เริ่มบอตเป็นบาท | รวมผลของเรตเงินด้วย จึงขยับได้แม้ยังไม่เทรด |
+| ผลเทียบเงินต้นเดิม · บาท | เทียบกับต้นทุนเงินบาทที่แบ่งมาจากการซื้อเดิม รวมผลก่อนเริ่มบอตด้วย |
+| เงินสำรอง | USDC ในกระเป๋าบอตที่กันไว้ไม่ใช้ซื้อ; ค่าเครือข่ายต้องมี SOL แยก |
+| กำไรที่พักไว้ | กำไรที่ขายรับมาแล้วและยังไม่อนุญาตให้ลงทุนต่อ การปล่อยกำไรยังอยู่ภายใต้วงเงินเดิม |
+
+ข้อความสถานะการกดปุ่มอยู่มุมล่างของหน้าจอเสมอ ปุ่มที่กำลังทำงานแสดงสถานะรอ หากทำไม่ได้จะแสดงเหตุผล ส่วนการเลือกสูตรเองและปุ่ม **ซื้อเองด้วยเงินจริง (ข้ามโมเดล)** อยู่ในเครื่องมือขั้นสูง ปุ่มนี้ไม่ใช่ paper trading
 
 ## Run the Windows app
 
 Download the **x64 MSI** and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/Rayato159/crypto-bros/releases), follow its setup wizard, then open **Crypto Bros** from Start. This preview is not Windows code-signed. Updates are manual; the signed in-app update channel is not configured. Before replacing an installed version, reconcile any signed pending order and choose **Stop bot and quit**. Preserve `%LOCALAPPDATA%\CryptoBros\data`; never delete it to fix an upgrade. Version 0.1 used NSIS and may retain a separate uninstall entry after installing MSI.
 
 1. **Refresh market** loads public SOL/USDC 15-minute candles. Alternatively choose **Load synthetic demo** to explore without a network connection. The app labels synthetic data explicitly.
-2. **Run model research** trains the initial model and searches 64 policy candidates. Inspect the holdout results under Research.
+2. **สร้าง / ทดสอบสูตรใหม่** trains the initial model and searches 64 policy candidates. Inspect the holdout results under Research.
 3. **Select for paper trading**, then **Start paper engine**. Selecting a model alone does not start trading. Manual paper layers are also available.
 4. Inspect each layer's cost, target, review threshold and realized fills. Close part or all of a layer. Profits remain parked until **Release parked profit**.
 5. Close the window to hide it in the tray. Use **Pause trading and new buys** or **Stop bot and quit** from the tray. Restart always pauses new entries; signed pending transactions remain queued for reconciliation. Sleep, shutdown or lost connectivity prevents monitoring.
@@ -33,9 +61,9 @@ Phantom holds the wallet and authorizes signatures. Jupiter finds swap routes an
 1. Connect the dedicated wallet, open **Live trading**, and refresh prices, FX and wallet. Synthetic prices cannot authorize real orders.
 2. Enter the original THB purchase cost, total USDC received from that purchase, and USDC allocated to the bot. The app assigns `original THB × allocated USDC / total USDC` as historical cost, rounded to satang. Confirm separately whether the original amount includes all fees. Personal amounts are never bundled into releases.
 3. Set the maximum active investment, maximum buy and unspent USDC reserve. The first release supports two open layers. Native SOL must separately cover tracked SOL positions, a 0.005 SOL fee buffer, the quoted network fee and any account rent. The buffer is not a per-transaction fee. Gasless and multisigner routes are intentionally unsupported.
-4. Enable manually approved buys. Run research and explicitly select its candidate for live advice. **Prepare model buy** requires a qualifying signal and rechecks the executable quote's estimated round-trip costs. **Prepare manual test buy** bypasses only the signal, retaining every hard limit.
-5. Review the prepared amounts, then open **Review and approve in Phantom**. Chrome is preferred, with the default browser as fallback. Compare the dedicated wallet, amount, minimum receipt and fees in Phantom. The approval link expires quickly; unlock Phantom before preparing a quote.
-6. The worker saves the verified signature before submission. A timeout leaves the order pending. Only finalized chain balances create a fill; clicking twice, restarting, or losing a response cannot authorize a second order. Use **Reconcile transaction now** after an ambiguous result. Do not manually repeat a pending trade elsewhere.
+4. Enable manually approved buys. Run research and explicitly select its candidate for live advice. **เตรียมซื้อเมื่อผ่านโมเดล** requires a qualifying signal and rechecks the executable quote's estimated round-trip costs. **ซื้อเองด้วยเงินจริง (ข้ามโมเดล)** bypasses only the signal, retaining every hard limit.
+5. Review the prepared amounts, then open **ตรวจรายการและยืนยันใน Phantom**. Chrome is preferred, with the default browser as fallback. Compare the dedicated wallet, amount, minimum receipt and fees in Phantom. The approval link expires quickly; unlock Phantom before preparing a quote.
+6. The worker saves the verified signature before submission. A timeout leaves the order pending. Only finalized chain balances create a fill; clicking twice, restarting, or losing a response cannot authorize a second order. Use **ตรวจผลคำสั่งเดิมอีกครั้ง** after an ambiguous result. Do not manually repeat a pending trade elsewhere.
 7. Sell half or all of a tracked layer through the same approval flow. Profits stay parked until released, within the original caps. Targets and review prices are decision thresholds, not guaranteed execution prices.
 
 The live dashboard separates original allocated THB cost, current marked value, bot USDC performance, and bot THB performance since onboarding. Earlier SOL/FX changes belong to historical P&L, not bot returns. USDC/THB comes from a Coinbase reference rate; it is not a guaranteed Bitkub withdrawal rate. Actual network fees are recorded in SOL and valued at the order's reference prices; account rent is recorded separately. Unconfirmed funding fees remain explicitly marked as incomplete. External deposits do not increase limits, and withdrawals below tracked balances block further preparation.

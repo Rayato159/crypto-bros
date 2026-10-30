@@ -106,25 +106,111 @@ pub fn advice(s: &Snapshot) -> Value {
         "historical_pnl_satang":net_thb-account.initial_cost_satang as i128,
         "bot_pnl_satang":net_thb-account.initial_reference_satang as i128,"risk_blocked":drawdown})
 }
+async fn refresh_live(state: &AppState) -> Result<(), String> {
+    crate::api::refresh(state).await?;
+    let address = state
+        .engine
+        .lock()
+        .await
+        .snapshot
+        .wallet
+        .as_ref()
+        .map(|w| w.address.clone())
+        .ok_or("Connect the bot wallet first")?;
+    let rate = chain::rate(&state.client).await?;
+    let balances = chain::balances(&state.client, &address).await?;
+    let mut e = state.engine.lock().await;
+    e.snapshot.thb_rate = Some(rate);
+    e.snapshot.real_balances = Some(balances);
+    e.snapshot.watch.error = None;
+    e.commit("real_balances_and_thb_refreshed")
+}
 pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result<Value, String> {
+    let mut prepared_payload = None;
+    if action == "live_watch_prepare" {
+        let key = payload["key"].as_str().ok_or("เลือกสัญญาณล่าสุดก่อน")?;
+        {
+            let e = state.engine.lock().await;
+            crate::watch::order_payload(&e.snapshot, key, now())?;
+        }
+        refresh_live(state).await?;
+        let e = state.engine.lock().await;
+        prepared_payload = Some(crate::watch::order_payload(&e.snapshot, key, now())?);
+    }
+    let action = if prepared_payload.is_some() {
+        "live_prepare"
+    } else {
+        action
+    };
+    let payload = prepared_payload.as_ref().unwrap_or(payload);
     match action {
-        "live_refresh" => {
-            crate::api::refresh(state).await?;
-            let rate = chain::rate(&state.client).await?;
-            let address = state
-                .engine
-                .lock()
-                .await
-                .snapshot
-                .wallet
-                .as_ref()
-                .map(|w| w.address.clone())
-                .ok_or("Connect the bot wallet first")?;
-            let balances = chain::balances(&state.client, &address).await?;
+        "live_watch_start" => {
+            {
+                let e = state.engine.lock().await;
+                let a = e
+                    .snapshot
+                    .real
+                    .as_ref()
+                    .ok_or("บันทึกกระเป๋า เงินทุน และวงเงินก่อนเริ่มเฝ้าตลาด")?;
+                if a.pending.is_some() || a.reconciliation_error.is_some() {
+                    return Err("จัดการรายการค้างและตรวจยอดบัญชีก่อนเริ่ม".into());
+                }
+            }
+            refresh_live(state).await?;
+            let needs_research = {
+                let e = state.engine.lock().await;
+                e.snapshot
+                    .real
+                    .as_ref()
+                    .is_some_and(|a| a.advice_model.is_none())
+                    && e.snapshot.research.is_none()
+            };
+            if needs_research {
+                crate::api::research(state).await?;
+            }
             let mut e = state.engine.lock().await;
-            e.snapshot.thb_rate = Some(rate);
-            e.snapshot.real_balances = Some(balances);
-            e.commit("real_balances_and_thb_refreshed")?;
+            market_ready(&e.snapshot)?;
+            let candidate = e.snapshot.research.clone();
+            let a = e.snapshot.real.as_mut().ok_or("Live account missing")?;
+            // This button explicitly selects the first formula. Later research never replaces it silently.
+            if a.advice_model.is_none() {
+                let c = candidate.ok_or("ยังสร้างสูตรไม่ได้ ลองเริ่มใหม่เมื่อข้อมูลพร้อม")?;
+                a.advice_model = Some(c.model);
+                a.advice_policy = c.policy;
+            }
+            e.snapshot.watch.enabled = true;
+            e.snapshot.watch.error = None;
+            e.snapshot.watch.notified.clear();
+            e.snapshot.live_enabled = true;
+            e.commit("trade_watch_started_by_user")?;
+        }
+        "live_watch_stop" => {
+            let mut e = state.engine.lock().await;
+            e.snapshot.watch.enabled = false;
+            pause(&mut e);
+            e.commit("trade_watch_stopped_by_user")?;
+        }
+        "live_watch_snooze" => {
+            let key = payload["key"].as_str().ok_or("เลือกสัญญาณก่อน")?;
+            let mut e = state.engine.lock().await;
+            crate::watch::order_payload(&e.snapshot, key, now())?;
+            e.snapshot.watch.snoozed.retain(|_, until| *until > now());
+            e.snapshot
+                .watch
+                .snoozed
+                .insert(key.into(), now() + crate::watch::REMINDER_SECONDS);
+            e.commit("trade_signal_snoozed")?;
+        }
+        "live_watch_claim" => {
+            let mut e = state.engine.lock().await;
+            let signal = crate::watch::claim(&mut e.snapshot, now());
+            if signal.is_some() {
+                e.commit("trade_notification_claimed")?;
+            }
+            return Ok(json!({"signal":signal}));
+        }
+        "live_refresh" => {
+            refresh_live(state).await?;
         }
         "live_setup" => {
             let address = {
@@ -325,6 +411,30 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
             )
             .await?;
             let mut e = state.engine.lock().await;
+            if let Some(key) = payload["watch_key"].as_str() {
+                let latest = crate::watch::order_payload(&e.snapshot, key, now())?;
+                if latest != *payload {
+                    return Err("สัญญาณหรือวงเงินเปลี่ยนระหว่างตรวจราคา กรุณาดูรายการล่าสุด".into());
+                }
+                if key.starts_with("sell:target:") {
+                    let layer = account
+                        .layers
+                        .iter()
+                        .find(|l| l.id == layer_id)
+                        .ok_or("ไม่พบไม้ที่ต้องการขาย")?;
+                    if !crate::watch::profit_exit_covers_costs(
+                        layer,
+                        order.minimum_output,
+                        order.network_fee,
+                        price,
+                    ) {
+                        return Err(
+                            "ถึงราคาเป้าหมายแล้ว แต่ยอดรับขั้นต่ำหลังค่าขายยังไม่เหลือกำไร ระบบจะรอสัญญาณใหม่"
+                                .into(),
+                        );
+                    }
+                }
+            }
             if side == "buy" && payload["manual"] != true {
                 let signal = advice(&e.snapshot);
                 let existing_cost = 2.0

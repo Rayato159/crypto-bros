@@ -90,6 +90,8 @@ pub struct Snapshot {
     pub real_balances: Option<crate::chain::Balances>,
     #[serde(default)]
     pub updating: bool,
+    #[serde(default)]
+    pub watch: crate::watch::Watch,
 }
 impl Snapshot {
     pub fn new() -> Result<Self, String> {
@@ -129,6 +131,7 @@ impl Snapshot {
             thb_rate: None,
             real_balances: None,
             updating: false,
+            watch: Default::default(),
         })
     }
     pub fn revalue(&mut self) -> Result<(), String> {

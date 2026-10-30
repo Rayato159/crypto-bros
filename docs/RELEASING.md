@@ -1,6 +1,6 @@
 # Release and update procedure
 
-Version 0.2 builds a Tauri/WiX MSI installer. Application binaries and frontend assets are the only installer resources. User data belongs under LocalAppData and must survive reinstall/update. Never include `.env`, user databases, models, logs, connection/session files, wallet files or credentials in an artifact or source archive. Version 0.1's NSIS registration is a separate installer product; do not assume MSI removes that entry.
+Version 0.3 builds a Tauri/WiX MSI installer. Application binaries and frontend assets are the only installer resources. User data belongs under LocalAppData and must survive reinstall/update. Never include `.env`, user databases, models, logs, connection/session files, wallet files or credentials in an artifact or source archive. Version 0.1's NSIS registration is a separate installer product; do not assume MSI removes that entry.
 
 ## Build a reviewable local artifact
 

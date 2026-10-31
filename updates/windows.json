@@ -1,11 +1,11 @@
 {
-  "version": "0.5.1",
-  "notes": "Fix closed wrapped-SOL account inspection during swap simulation. Explain target hits versus USDC and baht cost recovery, label imported SOL and enlarge sale buttons. Every real trade still requires manual Phantom approval.",
-  "pub_date": "2026-10-30T21:51:13.860Z",
+  "version": "0.6.0",
+  "notes": "Start RSI/MACD monitoring without a research wait. Review each proposal in Phantom. Remember net realized rewards by entry context; partial exits count once. Research mode retains its evidence gate. Reward memory does not automatically alter rules or limits.",
+  "pub_date": "2026-10-31T10:39:58.428Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUzk3UTVoajl2UFFFNWFZMW1XcDhIT1phTkVRNTZoNmZiUDltRE1IOWJ3UTlCTnh5Q0RQczJHQlh5WnZJN1FvQVExekwxaE93R3kzRWxVUkhWemtlU2FZZkM1a3FqNlFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMzk2OTM5CWZpbGU6Q3J5cHRvIEJyb3NfMC41LjFfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuNS4xCmNhZGJwMEF2ekpGN3BLdVZ2T0dhcHdmN2t2Z3hVTWZlTUV0dDlDWE9uZWJoT3J4eHJaM2hoZk5XdUF4cVVSR2RuTnlHUW9jcGF4eWlMZ2VRekl0MEJRPT0K",
-      "url": "https://github.com/Rayato159/crypto-bros/releases/download/v0.5.1/Crypto.Bros_0.5.1_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUzk3UTVoajl2UFk4V3ZSVjVMeENoZ0VibXhwZGxyejBRZUF5elB5S3ZQM3VkNk5oQ21uMVd4NlQ0c3RTcHlORWdIN2NTdWRlTVY4b1B0eGU0bXJMZHZGa1o2M0doZVFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNDQyOTk3CWZpbGU6Q3J5cHRvIEJyb3NfMC42LjBfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuNi4wCmNEdTlzZE1LdXNrczJlc0xWWGFlTUxONzI5UVBGTGlJZ24vUG9xdm93MVFTYmFGRDhhSkRVNy9kaXMwUWhJdmh1QkZiNDVRaDlYMmdhdTRZVG5WR0R3PT0K",
+      "url": "https://github.com/Rayato159/crypto-bros/releases/download/v0.6.0/Crypto.Bros_0.6.0_x64_en-US.msi"
     }
   }
 }

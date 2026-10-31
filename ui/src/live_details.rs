@@ -31,7 +31,9 @@ pub fn AllocationSetup() -> Element {
                 }
             }
             p {class:"muted small","สูตรเลือกขนาดไม้ได้เฉพาะส่วนเทรด ห้ามลดเงินสำรอง ถ้าค่าธรรมเนียมไม่คุ้มจะไม่เตรียมรายการ ขายเพื่อทบทวนความเสี่ยงอาจขาดทุนและต้องยืนยันเอง"}
-            if data["real_advice"]["model_eligible"]==true {
+            if a["entry_strategy"]=="rsi_macd" {
+                p {"โหมด RSI/MACD: แนะนำซื้อ 25% ของวงเงินที่จัดให้ช่อง · เมื่อถึงเป้าจะเสนอขาย SOL ส่วนเทรดทั้งหมด โดยเก็บส่วนสำรองไว้"}
+            } else if data["real_advice"]["model_eligible"]==true {
                 p {"สูตรที่เลือก: ซื้อ {n(&a[\"advice_policy\"][\"buy_size_bps\"])/100.0:.0}% ของวงเงินที่จัดให้ไม้ · ขายทำกำไร {n(&a[\"advice_policy\"][\"sell_size_bps\"])/100.0:.0}% ของ SOL ส่วนเทรดในไม้"}
             }
         }
@@ -94,6 +96,11 @@ pub fn LiveDetails() -> Element {
     }
 }
 fn decision_reason(action: &str, reason: &str) -> String {
+    // Preserve actionable Thai rule/evidence errors instead of replacing them
+    // with the generic forecast explanation from the research strategy.
+    if !reason.is_ascii() {
+        return reason.into();
+    }
     match action {
         "buy" => "โมเดลผ่านเกณฑ์เบื้องต้น ต้องตรวจวงเงินและราคาสลับจริงก่อนเสนอคำสั่ง".into(),
         "sell" => "มีไม้ถึงเป้าขายหรือจุดทบทวน ดูการ์ดและยืนยันเองใน Phantom".into(),

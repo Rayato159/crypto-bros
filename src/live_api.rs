@@ -1,3 +1,4 @@
+use crate::indicator_strategy::{self, EntryStrategy};
 use crate::{
     api::{AppState, Engine},
     chain,
@@ -47,6 +48,14 @@ fn market_ready(s: &Snapshot) -> Result<u64, String> {
 }
 pub fn model_buy_eligibility(s: &Snapshot) -> Result<(), &'static str> {
     let account = s.real.as_ref().ok_or("Set up the bot wallet first")?;
+    if account.entry_strategy == EntryStrategy::RsiMacd {
+        if account.reserve_bps != 2000 {
+            return Err("ตั้งค่าสำรอง 20/80 และบันทึกต้นทุน SOL เดิมก่อนเปิดเสนอซื้อ");
+        }
+        // This explicitly selected rules mode makes no research-validation claim.
+        indicator_strategy::context(&s.candles, now())?;
+        return Ok(());
+    }
     if account.advice_model.is_none() {
         if let Some(candidate) = &s.research {
             candidate.live_eligibility()?;
@@ -69,7 +78,7 @@ pub fn start_watch(s: &mut Snapshot) -> Result<(), String> {
     }
     // Only the first model may be selected by Start. Never silently replace
     // an existing model, including a legacy model without recorded evidence.
-    if a.advice_model.is_none() {
+    if a.entry_strategy == EntryStrategy::ResearchModel && a.advice_model.is_none() {
         if let Some(c) = &s.research {
             if c.live_eligibility().is_ok() {
                 a.select_advice(c)?;
@@ -101,6 +110,8 @@ pub fn advice(s: &Snapshot) -> Value {
     let exit = account.layers.iter().find(|l| {
         l.tradable_quantity() > 0 && (price >= l.target_price || price <= l.review_price)
     });
+    let rules = account.entry_strategy == EntryStrategy::RsiMacd;
+    let rule_context = indicator_strategy::context(&s.candles, now()).ok();
     let (prediction, edge) = match (&account.advice_model, &s.indicators) {
         (Some(m), Some(i)) => {
             let p = m.predict(i.features);
@@ -125,6 +136,16 @@ pub fn advice(s: &Snapshot) -> Value {
         ("wait", reason)
     } else if !s.live_enabled {
         ("paused", "New buy proposals are paused")
+    } else if rules && rule_context.as_ref().is_some_and(|c| c.buy_ready()) {
+        (
+            "buy",
+            "RSI อยู่ระหว่าง 30–55 และกำลังขึ้น; MACD อยู่เหนือ Signal และ Histogram เพิ่มขึ้น ตรวจราคาจริงและค่าใช้จ่ายก่อนยืนยัน",
+        )
+    } else if rules {
+        (
+            "wait",
+            "รอ RSI 30–55 ที่เพิ่มจากแท่งก่อน และ MACD เหนือ Signal พร้อม Histogram เพิ่มขึ้น ดูแต่ละเงื่อนไขด้านล่าง",
+        )
     } else if edge > account.advice_policy.min_edge {
         (
             "buy",
@@ -136,7 +157,7 @@ pub fn advice(s: &Snapshot) -> Value {
             "Model forecast does not clear uncertainty and estimated costs",
         )
     };
-    json!({"action":action,"reason":reason,"forecast":prediction,"net_edge":edge,"layer_id":exit.map(|l|l.id),
+    json!({"action":action,"reason":reason,"forecast":if rules {None}else{Some(prediction)},"net_edge":if rules {None}else{Some(edge)},"layer_id":exit.map(|l|l.id),"entry_strategy":account.entry_strategy,
         "equity_usdc":equity,"equity_satang":value_thb,"bot_pnl_usdc":equity as i128-account.initial_usdc as i128-account.fees_usdc as i128,
         "historical_pnl_satang":net_thb-account.initial_cost_satang as i128,
         "bot_pnl_satang":net_thb-account.initial_reference_satang as i128,"risk_blocked":drawdown,
@@ -180,7 +201,7 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
     };
     let payload = prepared_payload.as_ref().unwrap_or(payload);
     match action {
-        "live_watch_start" => {
+        "live_watch_start" | "live_watch_indicators" => {
             {
                 let e = state.engine.lock().await;
                 let a = e
@@ -193,13 +214,26 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                 }
             }
             refresh_live(state).await?;
+            if action == "live_watch_indicators" {
+                let mut e = state.engine.lock().await;
+                let mut next = e.snapshot.clone();
+                next.real
+                    .as_mut()
+                    .ok_or("Live account missing")?
+                    .entry_strategy = EntryStrategy::RsiMacd;
+                start_watch(&mut next)?;
+                if let Some(a) = next.real.as_mut() {
+                    a.last_advice_candle = 0;
+                }
+                e.snapshot = next;
+                e.commit("indicator_watch_started_by_user")?;
+                return Ok(json!({"ok":true}));
+            }
             let needs_research = {
                 let e = state.engine.lock().await;
-                e.snapshot
-                    .real
-                    .as_ref()
-                    .is_some_and(|a| a.advice_model.is_none())
-                    && e.snapshot.research.is_none()
+                e.snapshot.real.as_ref().is_some_and(|a| {
+                    a.entry_strategy == EntryStrategy::ResearchModel && a.advice_model.is_none()
+                }) && e.snapshot.research.is_none()
             };
             if needs_research {
                 crate::api::research(state).await?;
@@ -453,7 +487,7 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                         && a.fills
                             .iter()
                             .filter(|f| f.side == "buy")
-                            .any(|f| now() - f.time < a.advice_policy.cooldown_bars as i64 * 900)
+                            .any(|f| now() - f.time < a.entry_policy().cooldown_bars as i64 * 900)
                     {
                         return Err("The model's layer cooldown is still active".into());
                     }
@@ -488,13 +522,15 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                     .indicators
                     .as_ref()
                     .map_or(e.snapshot.price * 0.02, |i| i.atr);
-                let target = price_units(e.snapshot.price + a.advice_policy.take_profit_atr * atr)
+                let target = price_units(e.snapshot.price + a.entry_policy().take_profit_atr * atr)
                     .map_err(|e| e.to_string())?;
                 let review =
-                    price_units((e.snapshot.price - a.advice_policy.review_atr * atr).max(0.01))
+                    price_units((e.snapshot.price - a.entry_policy().review_atr * atr).max(0.01))
                         .map_err(|e| e.to_string())?;
                 let model = if manual {
                     "manual-live".into()
+                } else if a.entry_strategy == EntryStrategy::RsiMacd {
+                    indicator_strategy::VERSION.into()
                 } else {
                     a.advice_model
                         .as_ref()
@@ -502,7 +538,13 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                 };
                 (a.clone(), input, id, price, target, review, model)
             };
-            let order = chain::prepare(
+            let entry_context = if side == "buy" && model == indicator_strategy::VERSION {
+                let e = state.engine.lock().await;
+                Some(indicator_strategy::context(&e.snapshot.candles, now())?)
+            } else {
+                None
+            };
+            let mut order = chain::prepare(
                 &state.client,
                 &account,
                 side,
@@ -515,6 +557,7 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                 model,
             )
             .await?;
+            order.entry_context = entry_context.clone();
             let mut e = state.engine.lock().await;
             if let Some(key) = payload["watch_key"].as_str() {
                 let latest = crate::watch::order_payload(&e.snapshot, key, now())?;
@@ -550,20 +593,31 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                         "Model no longer recommends this buy; review the latest advice".into(),
                     );
                 }
-                let existing_cost = 2.0
-                    * (account.advice_policy.fee_bps + account.advice_policy.slippage_bps) as f64
-                    / 10_000.0;
-                let quoted_value = order.minimum_output as f64 * price as f64 / live::SOL as f64;
-                let network_cost = order.network_fee as f64 * price as f64 / live::SOL as f64;
-                let projected_cost = 2.0
-                    * ((1.0 - quoted_value / input as f64).max(0.0) + network_cost / input as f64);
-                let adjusted_edge = signal["net_edge"]
-                    .as_f64()
-                    .ok_or("Model advice is no longer available")?
-                    + existing_cost
-                    - projected_cost;
-                if adjusted_edge <= account.advice_policy.min_edge {
-                    return Err("The real quote, slippage allowance and estimated round-trip network costs consume the model's predicted edge".into());
+                if account.entry_strategy == EntryStrategy::RsiMacd {
+                    let latest = indicator_strategy::context(&e.snapshot.candles, now())?;
+                    if entry_context.as_ref() != Some(&latest) || !latest.buy_ready() {
+                        return Err("แท่งราคาเปลี่ยนระหว่างตรวจคำสั่ง ดูสัญญาณ RSI/MACD ล่าสุดก่อน".into());
+                    }
+                    indicator_strategy::check_quote(&order)?;
+                } else {
+                    let existing_cost = 2.0
+                        * (account.advice_policy.fee_bps + account.advice_policy.slippage_bps)
+                            as f64
+                        / 10_000.0;
+                    let quoted_value =
+                        order.minimum_output as f64 * price as f64 / live::SOL as f64;
+                    let network_cost = order.network_fee as f64 * price as f64 / live::SOL as f64;
+                    let projected_cost = 2.0
+                        * ((1.0 - quoted_value / input as f64).max(0.0)
+                            + network_cost / input as f64);
+                    let adjusted_edge = signal["net_edge"]
+                        .as_f64()
+                        .ok_or("Model advice is no longer available")?
+                        + existing_cost
+                        - projected_cost;
+                    if adjusted_edge <= account.advice_policy.min_edge {
+                        return Err("The real quote, slippage allowance and estimated round-trip network costs consume the model's predicted edge".into());
+                    }
                 }
             }
             e.snapshot
@@ -656,6 +710,7 @@ pub async fn reconcile(state: &AppState) -> Result<(), String> {
             let total_thb = a.fees_satang.checked_add(fee_thb).ok_or("Fee overflow")?;
             a.fees_usdc = total_usdc;
             a.fees_satang = total_thb;
+            a.record_failed_reward(&order, fee_usdc, fee_thb)?;
             a.fills.push(live::RealFill {
                 signature: order.signature.clone().ok_or("Missing signature")?,
                 layer_id: order.layer_id,
@@ -741,15 +796,38 @@ fn ticket_valid(e: &Engine, request: &TicketRequest) -> Result<(), String> {
     }
     if order.side == "buy" && order.model != "manual-live" {
         model_buy_eligibility(&e.snapshot)?;
-        let selected = e
-            .snapshot
-            .real
-            .as_ref()
-            .and_then(|a| a.advice_model.as_ref());
-        if selected.is_none_or(|m| m.version != order.model) {
-            return Err(
-                "The order's model changed; cancel this order and review a new proposal".into(),
-            );
+        if order.model == indicator_strategy::VERSION {
+            market_ready(&e.snapshot)?;
+            if e.snapshot
+                .real
+                .as_ref()
+                .is_none_or(|a| a.entry_strategy != EntryStrategy::RsiMacd)
+            {
+                return Err("โหมดซื้อเปลี่ยนแล้ว ยกเลิกรายการเดิมและตรวจสัญญาณใหม่".into());
+            }
+            let latest = indicator_strategy::context(&e.snapshot.candles, now())?;
+            if order.entry_context.as_ref() != Some(&latest) || !latest.buy_ready() {
+                return Err("สัญญาณ RSI/MACD เปลี่ยนแล้ว ยกเลิกรายการเดิมและตรวจสัญญาณใหม่".into());
+            }
+            indicator_strategy::check_quote(order)?;
+        } else {
+            if e.snapshot
+                .real
+                .as_ref()
+                .is_some_and(|a| a.entry_strategy != EntryStrategy::ResearchModel)
+            {
+                return Err("The entry strategy changed; prepare a new order".into());
+            }
+            let selected = e
+                .snapshot
+                .real
+                .as_ref()
+                .and_then(|a| a.advice_model.as_ref());
+            if selected.is_none_or(|m| m.version != order.model) {
+                return Err(
+                    "The order's model changed; cancel this order and review a new proposal".into(),
+                );
+            }
         }
     }
     if order.side == "buy"

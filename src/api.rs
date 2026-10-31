@@ -106,6 +106,8 @@ async fn snapshot(State(state): State<AppState>) -> Json<Value> {
     value["wallet_readout"] = crate::readout::view(&e.snapshot, chrono::Utc::now().timestamp());
     value["real_advice"] = crate::live_api::advice(&e.snapshot);
     value["trade_watch"] = crate::watch::view(&e.snapshot, chrono::Utc::now().timestamp());
+    value["indicator_strategy"] =
+        crate::indicator_strategy::view(&e.snapshot, chrono::Utc::now().timestamp());
     Json(value)
 }
 #[derive(Deserialize)]
@@ -589,6 +591,9 @@ pub async fn background(state: AppState) {
             (
                 e.snapshot.source == "binance_solusdc",
                 e.snapshot.next_research_at > 0
+                    && e.snapshot.real.as_ref().is_none_or(|a| {
+                        a.entry_strategy != crate::indicator_strategy::EntryStrategy::RsiMacd
+                    })
                     && chrono::Utc::now().timestamp() >= e.snapshot.next_research_at,
             )
         };
@@ -649,12 +654,16 @@ pub async fn background(state: AppState) {
                             advice["forecast"].as_f64().unwrap_or(0.0),
                             advice["net_edge"].as_f64().unwrap_or(0.0),
                         );
-                        let version = e
-                            .snapshot
-                            .real
-                            .as_ref()
-                            .and_then(|a| a.advice_model.as_ref())
-                            .map_or("manual-live".into(), |m| m.version.clone());
+                        let version = e.snapshot.real.as_ref().map_or("manual-live".into(), |a| {
+                            if a.entry_strategy == crate::indicator_strategy::EntryStrategy::RsiMacd
+                            {
+                                crate::indicator_strategy::VERSION.into()
+                            } else {
+                                a.advice_model
+                                    .as_ref()
+                                    .map_or("manual-live".into(), |m| m.version.clone())
+                            }
+                        });
                         if let Some(d) = e.snapshot.decisions.last_mut() {
                             d.model = version;
                         }

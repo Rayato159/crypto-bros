@@ -137,6 +137,8 @@ pub struct RealFill {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingOrder {
+    #[serde(default)]
+    pub entry_context: Option<crate::indicator_strategy::EntryContext>,
     pub id: String,
     pub side: String,
     pub layer_id: u64,
@@ -161,6 +163,10 @@ pub struct PendingOrder {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealAccount {
+    #[serde(default)]
+    pub entry_strategy: crate::indicator_strategy::EntryStrategy,
+    #[serde(default)]
+    pub reward_trades: Vec<crate::indicator_strategy::RewardTrade>,
     pub address: String,
     pub initial_usdc: u64,
     pub initial_cost_satang: u64,
@@ -218,6 +224,8 @@ impl RealAccount {
         .map_err(|_| "Allocated cost overflow")?;
         Ok(Self {
             address,
+            entry_strategy: Default::default(),
+            reward_trades: Vec::new(),
             initial_usdc: allocated,
             initial_cost_satang: cost,
             initial_reference_satang: rate.satang(allocated)?,
@@ -256,7 +264,20 @@ impl RealAccount {
         self.advice_model = Some(candidate.model.clone());
         self.advice_policy = candidate.policy.clone();
         self.advice_research = Some(candidate.clone());
+        self.entry_strategy = crate::indicator_strategy::EntryStrategy::ResearchModel;
         Ok(())
+    }
+    pub fn entry_policy(&self) -> crypto_bros_core::model::Policy {
+        if self.entry_strategy == crate::indicator_strategy::EntryStrategy::RsiMacd {
+            // Start small: 25% of the amount already bounded by cash, reserve,
+            // exposure and remaining slots. Reward memory cannot enlarge it.
+            crypto_bros_core::model::Policy {
+                buy_size_bps: 2500,
+                ..Default::default()
+            }
+        } else {
+            self.advice_policy.clone()
+        }
     }
     pub fn advice_eligibility(&self) -> Result<(), &'static str> {
         let model = self
@@ -511,6 +532,20 @@ impl RealAccount {
                 opened_at: time,
                 model: order.model.clone(),
             });
+            if let Some(entry) = order.entry_context.as_ref().filter(|c| c.buy_ready()) {
+                next.reward_trades
+                    .push(crate::indicator_strategy::RewardTrade {
+                        layer_id: id,
+                        entry: entry.clone(),
+                        sold_sol: 0,
+                        disposed_cost_usdc: 0,
+                        net_usdc: 0,
+                        net_satang: 0,
+                        exit_fills: 0,
+                        complete: false,
+                        failed_entry: false,
+                    });
+            }
             (id, 0, signed_difference(acquisition, disposed_basis)?)
         } else if order.side == "sell" {
             let layer = next
@@ -552,6 +587,41 @@ impl RealAccount {
                     gain.saturating_sub(reserved_part(gain, next.reserve_bps))
                 })
                 .ok_or("Profit overflow")?;
+            if let Some(reward) = next
+                .reward_trades
+                .iter_mut()
+                .find(|r| r.layer_id == order.layer_id && !r.failed_entry)
+            {
+                let basis = cost.checked_add(entry_fee).ok_or("Reward basis overflow")?;
+                let basis_thb = cost_thb
+                    .checked_add(entry_fee_thb)
+                    .ok_or("Reward basis overflow")?;
+                let net = signed_difference(
+                    output,
+                    basis.checked_add(fee_usdc).ok_or("Reward fee overflow")?,
+                )?;
+                let net_thb = signed_difference(
+                    proceeds_thb,
+                    basis_thb
+                        .checked_add(fee_satang)
+                        .ok_or("Reward fee overflow")?,
+                )?;
+                reward.sold_sol = reward
+                    .sold_sol
+                    .checked_add(input)
+                    .ok_or("Reward quantity overflow")?;
+                reward.disposed_cost_usdc = reward
+                    .disposed_cost_usdc
+                    .checked_add(basis)
+                    .ok_or("Reward basis overflow")?;
+                reward.net_usdc = reward.net_usdc.checked_add(net).ok_or("Reward overflow")?;
+                reward.net_satang = reward
+                    .net_satang
+                    .checked_add(net_thb)
+                    .ok_or("Reward overflow")?;
+                reward.exit_fills += 1;
+                reward.complete = layer.tradable_quantity() == 0;
+            }
             (
                 order.layer_id,
                 gain,
@@ -588,6 +658,45 @@ impl RealAccount {
         });
         next.pending = None;
         *self = next;
+        Ok(())
+    }
+    pub fn record_failed_reward(
+        &mut self,
+        order: &PendingOrder,
+        fee: u64,
+        fee_thb: u64,
+    ) -> Result<(), String> {
+        if order.side == "sell" {
+            if let Some(reward) = self
+                .reward_trades
+                .iter_mut()
+                .find(|r| r.layer_id == order.layer_id && !r.failed_entry)
+            {
+                let net = reward
+                    .net_usdc
+                    .checked_sub(i64::try_from(fee).map_err(|_| "Reward fee overflow")?)
+                    .ok_or("Reward overflow")?;
+                let thb = reward
+                    .net_satang
+                    .checked_sub(i64::try_from(fee_thb).map_err(|_| "Reward fee overflow")?)
+                    .ok_or("Reward overflow")?;
+                reward.net_usdc = net;
+                reward.net_satang = thb;
+            }
+        } else if let Some(entry) = &order.entry_context {
+            self.reward_trades
+                .push(crate::indicator_strategy::RewardTrade {
+                    layer_id: 0,
+                    entry: entry.clone(),
+                    sold_sol: 0,
+                    disposed_cost_usdc: order.input,
+                    net_usdc: signed_difference(0, fee)?,
+                    net_satang: signed_difference(0, fee_thb)?,
+                    exit_fills: 0,
+                    complete: true,
+                    failed_entry: true,
+                });
+        }
         Ok(())
     }
 }
@@ -642,6 +751,7 @@ mod tests {
     fn actual_fills_are_idempotent_and_partial_sales_keep_basis() {
         let mut a = account();
         let mut o = PendingOrder {
+            entry_context: None,
             id: "test".into(),
             side: "buy".into(),
             layer_id: 0,

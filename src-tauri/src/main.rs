@@ -136,6 +136,7 @@ async fn command(
         "live_prepare",
         "live_reconcile",
         "live_watch_start",
+        "live_watch_indicators",
         "live_watch_stop",
         "live_watch_snooze",
     ]

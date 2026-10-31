@@ -90,6 +90,197 @@ fn fixture() -> Snapshot {
     s.watch.enabled = true;
     s
 }
+
+fn indicator_fixture() -> Snapshot {
+    use crypto_bros::indicator_strategy::{self, EntryStrategy};
+    let mut s = fixture();
+    let source = demo_candles();
+    let now = chrono::Utc::now().timestamp();
+    let mut found = None;
+    for end in 60..source.len() {
+        let mut candles = source[..end].to_vec();
+        let offset = (now / 900 - 1) * 900 - candles.last().unwrap().time;
+        for c in &mut candles {
+            c.time += offset;
+        }
+        if indicator_strategy::context(&candles, now).is_ok_and(|c| c.buy_ready()) {
+            found = Some(candles);
+            break;
+        }
+    }
+    s.candles = found.expect("synthetic recovery signal");
+    s.price = s.candles.last().unwrap().close;
+    s.revalue().unwrap();
+    s.research = None;
+    let a = s.real.as_mut().unwrap();
+    a.advice_model = None;
+    a.advice_research = None;
+    a.entry_strategy = EntryStrategy::RsiMacd;
+    s
+}
+
+#[tokio::test]
+async fn indicator_approval_requires_the_same_fresh_signal_and_mode() {
+    use axum::{
+        Json,
+        extract::State,
+        http::{HeaderMap, HeaderValue, StatusCode, header},
+    };
+    use crypto_bros::{
+        indicator_strategy,
+        live_api::{TicketRequest, preview, submit},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let state = service(dir.path());
+    let mut snapshot = indicator_fixture();
+    let now = chrono::Utc::now().timestamp();
+    let context = indicator_strategy::context(&snapshot.candles, now).unwrap();
+    let price = crypto_bros_core::ledger::price_units(snapshot.price).unwrap();
+    let quantity = crypto_bros::live::ratio(2 * USDC, SOL, price).unwrap();
+    snapshot.real.as_mut().unwrap().pending=Some(serde_json::from_value(serde_json::json!({
+        "id":"rules-order","side":"buy","layer_id":0,"input":2*USDC,
+        "expected_output":quantity,"minimum_output":quantity,"unsigned_transaction":"",
+        "request_id":"","last_valid_block_height":0,"prepared_at":now,"expires_at":now+60,
+        "signature":null,"status":"awaiting_approval","network_fee":5000,"rent_delta":0,
+        "rate":snapshot.thb_rate,"price":price,"target_price":price*110/100,"review_price":price*90/100,
+        "model":indicator_strategy::VERSION,"message":null,"entry_context":context
+    })).unwrap());
+    {
+        let mut e = state.engine.lock().await;
+        e.snapshot = snapshot.clone();
+        e.live_ticket = Some(("rules-ticket".into(), "rules-order".into(), now + 60));
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("http://127.0.0.1:0"),
+    );
+    let request = || {
+        serde_json::from_value::<TicketRequest>(serde_json::json!({"ticket":"rules-ticket"}))
+            .unwrap()
+    };
+    assert_eq!(
+        preview(State(state.clone()), headers.clone(), Json(request()))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    for failure in 0..6 {
+        let mut changed = snapshot.clone();
+        match failure {
+            0 => {
+                changed
+                    .real
+                    .as_mut()
+                    .unwrap()
+                    .pending
+                    .as_mut()
+                    .unwrap()
+                    .entry_context = None
+            }
+            1 => changed.real.as_mut().unwrap().entry_strategy = Default::default(),
+            2 => changed.updated_at -= 300,
+            3 => changed.candles.last_mut().unwrap().volume *= 2.0,
+            4 => {
+                changed
+                    .real
+                    .as_mut()
+                    .unwrap()
+                    .pending
+                    .as_mut()
+                    .unwrap()
+                    .minimum_output = 1
+            }
+            _ => {
+                changed
+                    .real
+                    .as_mut()
+                    .unwrap()
+                    .pending
+                    .as_mut()
+                    .unwrap()
+                    .entry_context
+                    .as_mut()
+                    .unwrap()
+                    .rsi += 1.0
+            }
+        }
+        // Volume does not enter this strategy: changing it must not invalidate
+        // an otherwise identical RSI/MACD order. Other changes fail before signing.
+        state.engine.lock().await.snapshot = changed;
+        if failure == 3 {
+            assert_eq!(
+                preview(State(state.clone()), headers.clone(), Json(request()))
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+        } else {
+            assert_eq!(
+                preview(State(state.clone()), headers.clone(), Json(request()))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+            assert_eq!(
+                submit(State(state.clone()), headers.clone(), Json(request()))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
+    assert!(
+        state
+            .engine
+            .lock()
+            .await
+            .snapshot
+            .real
+            .as_ref()
+            .unwrap()
+            .fills
+            .is_empty()
+    );
+}
+
+#[test]
+fn explicitly_selected_indicator_mode_can_propose_without_research_but_keeps_limits() {
+    let mut s = indicator_fixture();
+    crypto_bros::live_api::start_watch(&mut s).unwrap();
+    assert!(s.live_enabled);
+    assert_eq!(crypto_bros::live_api::advice(&s)["action"], "buy");
+    let entries = cards(&s);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["side"], "buy");
+    assert_eq!(entries[0]["amount_usdc"], 7_500_000); // 25% of bounded 30 USDC slot
+    assert!(s.real.as_ref().unwrap().pending.is_none());
+    assert!(s.real.as_ref().unwrap().fills.is_empty());
+    for failure in 0..5 {
+        let mut failed = s.clone();
+        match failure {
+            0 => failed.real.as_mut().unwrap().reserve_bps = 0,
+            1 => failed.real_balances.as_mut().unwrap().sol = 0,
+            2 => failed.real_balances.as_mut().unwrap().usdc = 0,
+            3 => failed.updated_at -= 300,
+            _ => {
+                for c in &mut failed.candles {
+                    c.time -= 1800;
+                }
+            }
+        }
+        assert!(cards(&failed).is_empty(), "failure {failure}");
+    }
+    let mut legacy = s.clone();
+    legacy.real.as_mut().unwrap().entry_strategy = Default::default();
+    assert!(crypto_bros::live_api::model_buy_eligibility(&legacy).is_err());
+    let value = serde_json::to_value(&s).unwrap();
+    let restored: Snapshot = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        restored.real.unwrap().entry_strategy,
+        crypto_bros::indicator_strategy::EntryStrategy::RsiMacd
+    );
+}
 fn layer(s: &mut Snapshot, id: u64) {
     let a = s.real.as_mut().unwrap();
     a.cash -= 10 * USDC;
@@ -685,6 +876,7 @@ async fn stale_model_approval_is_blocked_at_preview_and_submit_without_blocking_
         let a = e.snapshot.real.as_mut().unwrap();
         a.advice_research = None;
         a.pending = Some(PendingOrder {
+            entry_context: None,
             id: "isolated-order".into(),
             side: "buy".into(),
             layer_id: 0,

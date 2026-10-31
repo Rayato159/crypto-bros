@@ -74,6 +74,7 @@ async fn run_action(mut ctx: Context, action: String, payload: Value) {
                         "บันทึกทุนและสำรอง 20/80 แล้ว ยังไม่มีการซื้อขาย ตรวจตัวเลขแล้วเริ่มเฝ้าตลาดได้"
                     }
                     "live_watch_start" => "เริ่มเฝ้าตลาดแล้ว เมื่อมีสัญญาณจะขึ้นการ์ดและแจ้งเตือนให้ตรวจรายการ",
+                    "live_watch_indicators" => "เริ่มเฝ้า RSI/MACD แล้ว ไม่ต้องรอ Research เมื่อเข้าเงื่อนไขจะให้ตรวจราคาและยืนยันใน Phantom",
                     "live_watch_stop" => "หยุดเฝ้าตลาดและพักซื้อเพิ่มแล้ว เหรียญที่ถือยังอยู่ในกระเป๋า",
                     "live_watch_snooze" => "พักการแจ้งเตือนสัญญาณนี้ 15 นาทีแล้ว ไม่มีการซื้อขาย",
                     "live_prepare" => "เตรียมคำสั่งแล้ว ตรวจส่วนรายการรอยืนยันและกดเปิด Phantom",
@@ -94,8 +95,9 @@ async fn run_action(mut ctx: Context, action: String, payload: Value) {
     ctx.busy.set(false);
 }
 fn friendly_error(error: &str) -> String {
-    if error.contains("Model recommends waiting") || error.contains("Model forecast does not clear")
-    {
+    if error.contains("Model recommends waiting:") {
+        error.replace("Model recommends waiting:", "ยังไม่เตรียมซื้อ:")
+    } else if error.contains("Model forecast does not clear") {
         "โมเดลยังแนะนำให้รอ โอกาสกำไรยังไม่ผ่านความไม่แน่นอนและต้นทุน จึงยังไม่เตรียมซื้อ".into()
     } else if error.contains("holdout") || error.contains("new candles") {
         "ยังมีแท่งราคาใหม่ไม่พอ ทดสอบสูตรรอบใหม่ต้องรอประมาณ 180 แท่ง 15 นาที (ราว 45 ชั่วโมง) เพื่อไม่ใช้ข้อมูลทดสอบซ้ำ หากสูตรเดิมผ่านเกณฑ์ยังใช้เฝ้าต่อได้".into()
@@ -183,7 +185,7 @@ fn app() -> Element {
         div {class:"shell",
             aside {class:"sidebar",div {class:"brand",div {class:"brand-mark","C↗"}div {class:"brand-name",div {"CRYPTO"}div {"BROS"}}}div {class:"workspace-label","PERSONAL TRADING LAB"}
                 nav {for (index,name) in ["Overview","Live trading","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
-                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.5.1 · MANUAL APPROVAL"}}
+                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.6.0 · MANUAL APPROVAL"}}
             }
             main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge",if tab()=="Live trading"{"REAL MONEY · PHANTOM"}else if tab()=="Overview"||tab()=="Layers"{"PAPER TRADING"}else{"RESEARCH / ACCOUNT TOOLS"}}}}
                 div {class:"content",
@@ -303,7 +305,7 @@ fn Decisions() -> Element {
     rsx! {
         div {class:"page-heading",div {div {class:"eyebrow","HUMAN IN THE LOOP"}h1 {"Show your work."}p {"Review the decision, not just whether the trade happened to win."}}span {class:"chip","{items(&data[\"feedback\"]).len()} FEEDBACK RECORDS"}}
         if rows.is_empty(){section {class:"panel empty",h2 {"The journal is waiting."}p {"Select a paper model and start the engine, or open a manual paper layer."}}}
-        for d in rows.into_iter().rev().take(40){section {class:"panel decision-card",div {class:"decision-header",span {class:"decision-action","{s(&d[\"action\"])}"}span {class:"muted small","DECISION #{n(&d[\"id\"]) as u64} · {s(&d[\"model\"])}"}}p {"{s(&d[\"reason\"])}"}div {class:"decision-meta",span {"Forecast {pct(n(&d[\"forecast\"]))}"}span {"Net edge {pct(n(&d[\"net_edge\"]))}"}}div {class:"actions compact",for (rating,label) in [("good","Good decision"),("too_early","Too early"),("too_risky","Too risky"),("bad","Bad decision")]{Action {label,action:"feedback",payload:json!({"decision_id":d["id"],"rating":rating})}}}}}
+        for d in rows.into_iter().rev().take(40){section {class:"panel decision-card",div {class:"decision-header",span {class:"decision-action","{s(&d[\"action\"])}"}span {class:"muted small","DECISION #{n(&d[\"id\"]) as u64} · {s(&d[\"model\"])}"}}p {"{s(&d[\"reason\"])}"}div {class:"decision-meta",if s(&d["model"])=="rsi-macd-v1" {span {"กติกา RSI/MACD · ดู reward จากผลขายจริงใน Live trading"}}else{span {"Forecast {pct(n(&d[\"forecast\"]))}"}span {"Net edge {pct(n(&d[\"net_edge\"]))}"}}}div {class:"actions compact",for (rating,label) in [("good","Good decision"),("too_early","Too early"),("too_risky","Too risky"),("bad","Bad decision")]{Action {label,action:"feedback",payload:json!({"decision_id":d["id"],"rating":rating})}}}}}
     }
 }
 #[component]
@@ -340,13 +342,15 @@ fn TradeWatch() -> Element {
     let watch = &data["trade_watch"];
     let enabled = watch["enabled"] == true;
     let connected = data["engine_connected"] != false;
+    let rules = data["real"]["entry_strategy"] == "rsi_macd";
     rsx! {
         section {class:"panel spaced trade-watch",
             div {class:"panel-heading",h2 {"เฝ้าตลาดให้ แล้วมึงเลือกยืนยัน"}span {class:"chip",if enabled{"กำลังเฝ้า"}else{"ยังไม่เริ่ม"}}}
-            p {class:"watch-copy","ตั้งทุนครั้งเดียวแล้วกดเริ่ม แอปเตรียมสูตรเริ่มต้นและตรวจตลาดทุกประมาณ 1 นาที เมื่อเข้าเกณฑ์ซื้อหรือขายจะแจ้งเตือนให้กดตรวจรายการ ไม่ต้องกรอกจำนวนเองทุกไม้"}
+            p {class:"watch-copy","กดเริ่มเฝ้า RSI/MACD ได้เลย ไม่ต้องรอ Research แอปตรวจประมาณทุก 1 นาทีจากแท่ง 15 นาทีที่ปิดแล้ว เมื่อเข้าเงื่อนไขจะแจ้งให้ตรวจราคาและยืนยันใน Phantom กติกานี้ยังไม่ได้พิสูจน์ว่าจะทำกำไร"}
             div {class:"actions",
                 if enabled {Action {label:"หยุดเฝ้าตลาด",action:"live_watch_stop"}}
-                else {Action {label:"เริ่มเฝ้าตลาด",action:"live_watch_start",kind:"primary"}}
+                else {Action {label:"เริ่มเฝ้า RSI / MACD",action:"live_watch_indicators",kind:"primary"}}
+                if enabled && !rules {Action {label:"เปลี่ยนมาเฝ้า RSI / MACD",action:"live_watch_indicators",kind:"primary"}}
                 if enabled && data["live_enabled"]!=true && data["real_advice"]["model_eligible"]==true && data["real_advice"]["risk_blocked"]!=true && data["real"]["pending"].is_null(){Action {label:"กลับมาเฝ้าทั้งซื้อและขาย",action:"live_watch_start",kind:"primary"}}
                 button {class:"button secondary",onclick:move |_|{spawn(async move {
                     ctx.notice.set(match invoke("test_notification",json!({})).await {Ok(_)=>"ส่งคำขอแจ้งเตือนทดสอบแล้ว ถ้าเห็นข้อความ กดเพื่อกลับหน้านี้ ไม่มีการซื้อขาย".into(),Err(e)=>e});
@@ -354,9 +358,10 @@ fn TradeWatch() -> Element {
             }
             p {class:"muted small","{s(&data[\"notification_status\"])}"}
             if enabled && data["real_advice"]["model_eligible"]==false {
-                p {class:"warning","ยังเฝ้าเป้าขายและความเสี่ยงของไม้เดิม แต่สูตรยังใช้เสนอซื้อไม่ได้ ต้องเลือกสูตรที่ผ่านเกณฑ์ก่อน"}
+                p {class:"warning","{s(&data[\"real_advice\"][\"model_block_reason\"])}"}
             }
             p {class:"watch-copy","วงเงินสูงสุดต่อไม้ {money(n(&data[\"real\"][\"config\"][\"max_buy\"])/1e6)} USDC ระบบจะลดจำนวนลงตามเงินที่ใช้ได้และจำนวนไม้ที่เหลือ"}
+            if rules {p {class:"muted","โหมด RSI/MACD เริ่มด้วย 25% ของวงเงินต่อช่องที่ยังใช้ได้ ไม่แตะสำรอง 20% และเว้นอย่างน้อย 1 ชั่วโมงหลังซื้อไม้ก่อน เป้าขายห่าง 2.5 × ATR; จุดทบทวนความเสี่ยงห่าง 3 × ATR ไม่ใช่การรับประกันราคาหรือคำสั่งขายอัตโนมัติ"}}
             if !connected {p {class:"warning","ขาดการเชื่อมต่อกับตัวเฝ้าตลาด ข้อมูลอาจเก่า กรุณาเปิดแอปใหม่ก่อนทำรายการ"}}
             else if items(&watch["signals"]).is_empty(){div {class:"watch-empty","{s(&watch[\"message\"])}"}}
             div {class:"watch-signals",for signal in items(&watch["signals"]) {
@@ -390,6 +395,53 @@ fn TradeWatch() -> Element {
                 }
             }}
             p {class:"muted small","การกดแจ้งเตือนเปิดแอปเท่านั้น ทุกการซื้อและขายต้องเซ็นใน Phantom • คอมต้องเปิดและไม่หลับ • Windows อาจซ่อนแจ้งเตือนเมื่อเปิดห้ามรบกวน"}
+        }
+        IndicatorRuleDetails {}
+    }
+}
+#[component]
+fn IndicatorRuleDetails() -> Element {
+    let ctx = use_context::<Context>();
+    let data = (ctx.state)();
+    let rules = &data["indicator_strategy"];
+    let c = &rules["context"];
+    let all = &rules["all"];
+    let similar = &rules["similar"];
+    if rules.is_null() {
+        return rsx! {};
+    }
+    rsx! {
+        section {class:"panel spaced",
+            h2 {"เงื่อนไข RSI / MACD ตอนนี้"}
+            p {class:"muted","ต้องผ่านครบทั้ง 4 ข้อก่อนเสนอซื้อ จากนั้นยังตรวจยอด สำรอง ความเสี่ยง และค่าใช้จ่ายจริง โหมดนี้ใช้กติกาที่เปิดเผย ไม่ใช่โมเดลที่ผ่าน backtest"}
+            if c.is_null() {p {class:"warning","{s(&rules[\"error\"])}"}}
+            else {
+                for (key,label) in [("rsi_zone","RSI อยู่ในช่วง 30–55"),("rsi_rising","RSI เพิ่มจากแท่งก่อน"),("macd_above_signal","MACD อยู่เหนือเส้น Signal"),("histogram_rising","Histogram เพิ่มจากแท่งก่อน")] {
+                    div {class:"watch-row",span {"{label}"}strong {class:if rules[key]==true{"positive"}else{"muted"},if rules[key]==true{"ผ่าน"}else{"รอ"}}}
+                }
+                p {"RSI {n(&c[\"previous_rsi\"]):.2} → {n(&c[\"rsi\"]):.2} · MACD {n(&c[\"macd\"]):.4} / Signal {n(&c[\"signal\"]):.4} · Histogram {n(&c[\"previous_histogram\"]):.4} → {n(&c[\"histogram\"]):.4}"}
+            }
+            h3 {"จำผลเงินจริงเป็น reward"}
+            p {"ปิดส่วนเทรดแล้ว {n(&all[\"completed\"]) as u64} เคส · กำไรสุทธิทั้ง USDC และบาท {n(&all[\"wins\"]) as u64} เคส · ผลอื่น {n(&all[\"other_outcomes\"]) as u64} เคส"}
+            p {"ผลจากส่วนที่ขายแล้ว รวมค่าธรรมเนียมที่จัดสรร: {money(n(&all[\"net_usdc\"])/1e6)} USDC / ฿{money(n(&all[\"net_satang\"])/100.0)}"}
+            if !c.is_null() {
+                if n(&similar["completed"])>0.0 {p {"สัญญาณใกล้เคียงตอนนี้: {n(&similar[\"completed\"]) as u64} เคส · reward เฉลี่ย {pct(n(&similar[\"mean_reward\"]))} ของต้นทุนส่วนที่ขายแล้ว"}}
+                else {p {class:"muted","ยังไม่มีผลเงินจริงของสัญญาณลักษณะนี้ เริ่มเฝ้าได้โดยไม่ต้องรอเก็บให้ครบ 8 ไม้"}}
+            }
+            p {class:"muted","เก็บค่า RSI/MACD ตอนเตรียมซื้อ แล้วอัปเดตคะแนนหลังธุรกรรมขายยืนยันบนเชน กำไรบวก ขาดทุนลบ การแบ่งขายหลายครั้งยังเป็นเคสเดียว ส่วน SOL สำรองที่ยังไม่ขายไม่ใช่ reward ค่าธรรมเนียมรายการล้มเหลวถูกหักด้วย"}
+            p {class:"muted","คะแนนเป็นสถิติจากผลจริง ไม่ใช่โอกาสชนะที่รับประกัน และยังไม่ปรับกติกาหรือวงเงินอัตโนมัติ ไม่ใช่ Q-Learning หรือ Deep Learning"}
+            p {class:"muted","เริ่มจำเฉพาะไม้ใหม่จากโหมดนี้ รายการเก่าหรือ SOL ที่นำเข้าซึ่งไม่มีค่า RSI/MACD ตอนซื้อจะไม่ถูกเติมประวัติขึ้นเอง"}
+            details {class:"advanced-tools",summary {"ดูค่าเข้าและ reward ของแต่ละไม้"},
+                table {thead {tr {th {"ไม้"}th {"RSI ตอนเข้า"}th {"MACD / Signal"}th {"Reward · USDC / บาท"}th {"สถานะ"}}}
+                    tbody {for trade in items(&data["real"]["reward_trades"]).into_iter().rev().take(20) {tr {
+                        td {"#{n(&trade[\"layer_id\"]) as u64}"}
+                        td {"{n(&trade[\"entry\"][\"rsi\"]):.2}"}
+                        td {"{n(&trade[\"entry\"][\"macd\"]):.4} / {n(&trade[\"entry\"][\"signal\"]):.4}"}
+                        td {"{money(n(&trade[\"net_usdc\"])/1e6)} / ฿{money(n(&trade[\"net_satang\"])/100.0)}"}
+                        td {if trade["failed_entry"]==true {"ซื้อไม่สำเร็จ · เสียค่าเครือข่าย"}else if trade["complete"]==true {"ขายส่วนเทรดแล้ว"}else {"ยังถือ / ขายบางส่วน"}}
+                    }}}
+                }
+            }
         }
     }
 }
@@ -457,10 +509,10 @@ fn LiveTrading() -> Element {
             if pending.is_null(){
                 details {class:"advanced-tools",summary {"เครื่องมือขั้นสูง: ดูสูตร หรือเตรียมคำสั่งเอง"}
                 section {class:"panel spaced",div {class:"panel-heading",h2 {"Next move: {s(&advice[\"action\"])}"}span {class:"chip","ADVICE ≠ AN EXECUTED ORDER"}}p {"{s(&advice[\"reason\"])}"}
-                    div {class:"actions",Action {label:"เปิดให้เสนอซื้อเพิ่ม",action:"enable_live"}Action {label:"สร้าง / ทดสอบสูตรใหม่",action:"research"}Action {label:"ใช้สูตรที่ทดสอบล่าสุด",action:"live_use_model"}}
+                    div {class:"actions",Action {label:"เปิดให้เสนอซื้อเพิ่ม",action:"enable_live"}Action {label:"สร้าง / ทดสอบสูตรใหม่",action:"research"}Action {label:"ใช้โมเดล Research แทน RSI/MACD",action:"live_use_model"}}
                     p {class:"muted small","An explicitly selected research model uses RSI, MACD and other features. Optimization cannot change your reserve or trade limits. Targets follow each layer and estimated costs; there is no forced daily or weekly return."}
                     LiveField {label:"เงินที่ใช้ซื้อครั้งนี้ · USDC",value:amount}
-                    div {class:"actions",Action {label:"เตรียมซื้อเมื่อผ่านโมเดล",action:"live_prepare",kind:"primary",payload:json!({"side":"buy","amount_usdc":amount()})}Action {label:"ซื้อเองด้วยเงินจริง (ข้ามโมเดล)",action:"live_prepare",payload:json!({"side":"buy","amount_usdc":amount(),"manual":true})}}
+                    div {class:"actions",Action {label:"เตรียมซื้อตามโหมดที่เลือก",action:"live_prepare",kind:"primary",payload:json!({"side":"buy","amount_usdc":amount()})}Action {label:"ซื้อเองด้วยเงินจริง (ข้ามสัญญาณ)",action:"live_prepare",payload:json!({"side":"buy","amount_usdc":amount(),"manual":true})}}
                     p {class:"muted small","ปุ่มซื้อเองใช้เงินจริงและข้ามเฉพาะสัญญาณโมเดล ยังตรวจวงเงินและความเสี่ยง กดเตรียมแล้วยังต้องเซ็นใน Phantom"}
                 }
                 }
@@ -500,7 +552,7 @@ fn Settings() -> Element {
     let ctx = use_context::<Context>();
     let data = (ctx.state)();
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.5.1 · manually approved trading"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.6.0 · manually approved trading"}}}
         div {class:"bottom-grid",
             updates_ui::Updates{}
             section {class:"panel",h2 {"Connections"}div {class:"watch-row",span {"Jupiter API key"}strong {if data["jupiter_key_configured"]==true{"CONFIGURED"}else{"KEYLESS QUOTES"}}}div {class:"watch-row",span {"Email notifications"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}

@@ -1,7 +1,7 @@
 {
   "name": "crypto-bros-build",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.6.0",
   "scripts": {
     "test:wallet": "node --test scripts/test-wallet.mjs",
     "desktop": "node scripts/prepare.mjs && tauri dev",

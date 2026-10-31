@@ -173,6 +173,7 @@ async fn moving_from_demo_preserves_the_complete_old_account_in_a_backup() {
 }
 fn pending_fixture() -> crypto_bros::live::PendingOrder {
     crypto_bros::live::PendingOrder {
+        entry_context: None,
         id: "synthetic-order".into(),
         side: "buy".into(),
         layer_id: 0,

@@ -1,5 +1,6 @@
 pub mod api;
 pub mod chain;
+pub mod indicator_strategy;
 pub mod live;
 pub mod live_api;
 pub mod market;

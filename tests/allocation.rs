@@ -42,6 +42,7 @@ fn fixture() -> (RealAccount, Balances, ThbRate) {
 
 fn order(rate: &ThbRate, side: &str, input: u64, output: u64) -> PendingOrder {
     PendingOrder {
+        entry_context: None,
         id: "synthetic-order".into(),
         side: side.into(),
         layer_id: 1,
@@ -64,6 +65,139 @@ fn order(rate: &ThbRate, side: &str, input: u64, output: u64) -> PendingOrder {
         model: "synthetic-manual".into(),
         message: None,
     }
+}
+
+#[test]
+fn indicator_rewards_use_confirmed_net_results_and_one_case_per_tradable_layer() {
+    use crypto_bros::indicator_strategy::{EntryContext, VERSION, memory};
+    let (mut a, _, rate) = fixture();
+    a.reserve_bps = 2000;
+    let mut buy = order(&rate, "buy", 10 * USDC, SOL / 10);
+    buy.model = VERSION.into();
+    buy.entry_context = Some(EntryContext {
+        version: VERSION.into(),
+        candle_time: rate.fetched_at - 900,
+        close: 100.0,
+        rsi: 40.0,
+        previous_rsi: 38.0,
+        macd: -0.1,
+        signal: -0.2,
+        histogram: 0.1,
+        previous_histogram: -0.1,
+        atr: 1.0,
+    });
+    a.apply_fill(
+        &buy,
+        "synthetic-entry",
+        buy.input,
+        buy.expected_output,
+        5000,
+        0,
+        rate.fetched_at,
+    )
+    .unwrap();
+    assert_eq!(a.reward_trades.len(), 1);
+    assert_eq!(memory(&a.reward_trades, None)["completed"], 0);
+    assert_eq!(
+        memory(&a.reward_trades, None)["net_usdc"],
+        0,
+        "Unsold gains are not rewards"
+    );
+    let sell = order(&rate, "sell", SOL * 4 / 100, 4_400_000);
+    a.apply_fill(
+        &sell,
+        "synthetic-exit-1",
+        sell.input,
+        sell.expected_output,
+        5000,
+        0,
+        rate.fetched_at + 1,
+    )
+    .unwrap();
+    assert_eq!(memory(&a.reward_trades, None)["completed"], 0);
+    a.apply_fill(
+        &sell,
+        "synthetic-exit-2",
+        sell.input,
+        sell.expected_output,
+        5000,
+        0,
+        rate.fetched_at + 2,
+    )
+    .unwrap();
+    assert_eq!(memory(&a.reward_trades, None)["completed"], 1);
+    assert_eq!(memory(&a.reward_trades, None)["wins"], 1);
+    assert_eq!(a.reward_trades[0].net_usdc, 798_600); // 0.8 gain - 0.0004 entry gas - 0.001 exit gas
+    assert_eq!(a.reward_trades[0].disposed_cost_usdc, 8_000_400);
+    assert_eq!(a.layers[0].quantity, SOL / 50); // 20% protected SOL is still open, never a reward.
+    a.apply_fill(
+        &sell,
+        "synthetic-exit-2",
+        sell.input,
+        sell.expected_output,
+        5000,
+        0,
+        rate.fetched_at + 2,
+    )
+    .unwrap();
+    assert_eq!(a.reward_trades[0].net_usdc, 798_600);
+    a.record_failed_reward(&buy, 1000, 3).unwrap();
+    let m = memory(&a.reward_trades, None);
+    assert_eq!(m["completed"], 1);
+    assert_eq!(m["failed_entries"], 1);
+    assert_eq!(m["net_usdc"], 797_600);
+    let restored: RealAccount = serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+    assert_eq!(memory(&restored.reward_trades, None), m);
+}
+
+#[test]
+fn indicator_loss_and_failed_exit_are_negative_rewards_and_costly_quotes_fail() {
+    use crypto_bros::indicator_strategy::{self, EntryContext, VERSION};
+    let (mut a, _, rate) = fixture();
+    let mut buy = order(&rate, "buy", 10 * USDC, SOL / 10);
+    buy.entry_context = Some(EntryContext {
+        version: VERSION.into(),
+        candle_time: 0,
+        close: 100.0,
+        rsi: 40.0,
+        previous_rsi: 39.0,
+        macd: 0.1,
+        signal: 0.0,
+        histogram: 0.1,
+        previous_histogram: 0.0,
+        atr: 1.0,
+    });
+    assert!(indicator_strategy::check_quote(&buy).is_ok());
+    let mut expensive = buy.clone();
+    expensive.minimum_output = SOL / 20;
+    assert!(indicator_strategy::check_quote(&expensive).is_err());
+    a.apply_fill(
+        &buy,
+        "buy-loss-case",
+        buy.input,
+        buy.expected_output,
+        5000,
+        0,
+        rate.fetched_at,
+    )
+    .unwrap();
+    let sell = order(&rate, "sell", SOL / 10, 9 * USDC);
+    a.record_failed_reward(&sell, 500, 1).unwrap();
+    a.apply_fill(
+        &sell,
+        "sell-loss-case",
+        sell.input,
+        sell.expected_output,
+        5000,
+        0,
+        rate.fetched_at + 1,
+    )
+    .unwrap();
+    assert_eq!(a.reward_trades[0].net_usdc, -1_001_500);
+    assert_eq!(
+        indicator_strategy::memory(&a.reward_trades, None)["wins"],
+        0
+    );
 }
 
 #[test]

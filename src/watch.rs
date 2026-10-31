@@ -71,7 +71,7 @@ pub fn buy_size(a: &RealAccount) -> u64 {
         .saturating_sub(a.parked_profit)
         .min(a.config.max_buy)
         .min(remaining / slots as u64);
-    a.advice_policy.buy_size(bounded)
+    a.entry_policy().buy_size(bounded)
 }
 
 fn status(s: &Snapshot, state: &str, message: &str) -> Value {
@@ -131,7 +131,7 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
         let quantity = if risk || a.advice_eligibility().is_err() {
             l.tradable_quantity()
         } else {
-            a.advice_policy.sell_size(l.tradable_quantity())
+            a.entry_policy().sell_size(l.tradable_quantity())
         };
         if quantity == 0 {
             continue;
@@ -167,7 +167,7 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
         .fills
         .iter()
         .filter(|f| f.side == "buy")
-        .any(|f| now.saturating_sub(f.time) < a.advice_policy.cooldown_bars as i64 * 900);
+        .any(|f| now.saturating_sub(f.time) < a.entry_policy().cooldown_bars as i64 * 900);
     let held_sol = a
         .layers
         .iter()
@@ -183,14 +183,23 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
     {
         let key = format!(
             "buy:{}:{}",
-            a.advice_model
-                .as_ref()
-                .map_or("none", |m| m.version.as_str()),
+            if a.entry_strategy == crate::indicator_strategy::EntryStrategy::RsiMacd {
+                format!(
+                    "{}:{}",
+                    crate::indicator_strategy::VERSION,
+                    s.candles.last().map_or(0, |c| c.time)
+                )
+            } else {
+                a.advice_model
+                    .as_ref()
+                    .map_or("none", |m| m.version.as_str())
+                    .to_string()
+            },
             a.fills.len()
         );
         signals.push(json!({"key":key,"side":"buy","risk":false,"layer_id":0,
             "title":format!("มีสัญญาณซื้อ SOL ด้วย {:.2} USDC",amount as f64/USDC as f64),
-            "reason":"โมเดลผ่านเกณฑ์ความไม่แน่นอนและต้นทุนโดยประมาณ ระบบแบ่งวงเงินตามจำนวนไม้ที่เหลือ",
+            "reason":advice["reason"],
             "amount_usdc":amount,"value_satang":rate.satang(amount).unwrap_or(0),
             "button":"ตรวจราคาซื้อ → Phantom","observed_at":s.updated_at,"expires_at":s.updated_at+120}));
     }
@@ -208,7 +217,9 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
         reason
     } else if !s.live_enabled {
         "ยังเฝ้าราคาขายอยู่ แต่พักการเสนอซื้อเพิ่ม"
-    } else if a.advice_model.is_none() {
+    } else if a.entry_strategy == crate::indicator_strategy::EntryStrategy::ResearchModel
+        && a.advice_model.is_none()
+    {
         "ยังไม่มีสูตรแนะนำซื้อ กดเริ่มเฝ้าตลาดเพื่อเตรียมสูตร"
     } else if !gas_ready || !balance_ready {
         "ยอดกระเป๋าหรือ SOL สำหรับค่าธรรมเนียมยังไม่พร้อมซื้อ"
@@ -216,6 +227,8 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
         "เฝ้าไม้ที่ถืออยู่ วงเงินหรือจำนวนไม้ยังไม่เปิดให้ซื้อเพิ่ม"
     } else if cooldown {
         "เฝ้าตลาดอยู่ รอครบช่วงเว้นระยะหลังซื้อไม้ก่อน"
+    } else if a.entry_strategy == crate::indicator_strategy::EntryStrategy::RsiMacd {
+        "เฝ้า RSI/MACD อยู่ ดูเงื่อนไขที่ยังไม่ผ่านด้านล่าง ไม่ต้องรอผล Research"
     } else {
         "เฝ้าตลาดอยู่ ยังไม่มีรายการที่ผ่านเกณฑ์ให้กด"
     };

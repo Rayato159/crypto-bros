@@ -430,6 +430,7 @@ pub async fn prepare(
     }
     let now = chrono::Utc::now().timestamp();
     let mut order = PendingOrder {
+        entry_context: None,
         id: uuid::Uuid::new_v4().to_string(),
         side: side.into(),
         layer_id,

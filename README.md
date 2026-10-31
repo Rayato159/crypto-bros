@@ -1,6 +1,6 @@
 # Crypto Bros
 
-**0.5.1 fixes `Unexpected token account program` for closed wrapped-SOL accounts returned by swap simulation.** It also explains target prices versus cost recovery, labels imported SOL, and enlarges manual-sale buttons. A target hit can still be unprofitable in baht: a profit-triggered proposal must cover costs in both USDC and reference THB at the actual quote minimum. Manual partial/full sales remain explicit user decisions and may realize a loss; every sale requires Phantom approval.
+**0.6.0 adds immediate RSI/MACD monitoring and realized-reward memory.** This explicitly selected rules mode does not require a research candidate or the 180-candle research cooldown. It is an unvalidated heuristic, not a claim that the research model passed. Research-model mode retains its evidence gate. Every real trade still requires Phantom approval.
 
 Rust desktop workstation for SOL/USDC research, paper trading and **individually approved real trades**. Dioxus Web runs inside Tauri; the Rust worker keeps running independently of the window. SQLite keeps separate paper and real ledgers, models and feedback locally.
 
@@ -8,10 +8,11 @@ Rust desktop workstation for SOL/USDC research, paper trading and **individually
 
 ## เฝ้าตลาดแบบไม่ต้องไล่กดหลายปุ่ม
 
-หลังเชื่อม Phantom และบันทึกทุนใน **Live trading** กด **เริ่มเฝ้าตลาด** ครั้งเดียว แอปจะรีเฟรชข้อมูล เตรียมและเลือกสูตรเริ่มต้นหากยังไม่มี แล้วตรวจตลาดประมาณทุกนาที สูตรที่ใช้อยู่จะไม่ถูกแทนที่อัตโนมัติเมื่อมีผลวิจัยรอบใหม่
+หลังเชื่อม Phantom บันทึกทุนและสำรอง 20/80 ใน **Live trading** กด **เริ่มเฝ้า RSI / MACD** ครั้งเดียว แอปตรวจตลาดประมาณทุกนาทีโดยใช้แท่ง 15 นาทีที่ปิดแล้ว ไม่ต้องกด Research กติกาคือ RSI 30–55 และเพิ่มจากแท่งก่อน พร้อม MACD เหนือ Signal และ Histogram เพิ่มจากแท่งก่อน หน้าแอปแสดงแต่ละข้อว่าผ่านหรือยัง
 
 - กด **ทดสอบแจ้งเตือน** ก่อนซ่อนแอปไว้ในถาดระบบ คอมต้องเปิดและไม่หลับ Windows อาจซ่อนข้อความเมื่อปิดแจ้งเตือนหรือเปิดห้ามรบกวน
-- เมื่อโมเดลผ่านเกณฑ์ซื้อ การ์ดจะแสดงจำนวนที่แบ่งจากวงเงินและจำนวนไม้ที่เหลือ โดยไม่ใช้เงินสำรองหรือกำไรที่ยังพักไว้
+- เมื่อครบเงื่อนไข การ์ดแสดงยอดแนะนำ 25% ของวงเงินต่อช่องที่ยังใช้ได้ โดยไม่ใช้เงินสำรองหรือกำไรที่พักไว้ และเว้น 1 ชั่วโมงหลังซื้อครั้งก่อน กดตรวจราคาแล้วจึงยืนยันใน Phantom; ราคาเป้าต้องเหลือส่วนต่างหลังค่าใช้จ่ายโดยประมาณด้วย
+- Reward จับคู่ค่า RSI/MACD ตอนเตรียมซื้อกับผลขายที่ยืนยันบนเชน หักต้นทุนและค่าเครือข่ายขาเข้า/ออกตามส่วนที่ขาย รวมค่าธรรมเนียมรายการล้มเหลว แบ่งขายหลายครั้งนับเป็นหนึ่งเคส กำไรค้างและ SOL สำรองที่ยังถือไม่ใช่ reward สถิติคล้ายกันจัดกลุ่มตามช่วง RSI, เครื่องหมาย MACD และ Histogram/ATR ไม่ใช่โอกาสชนะ และยังไม่เปลี่ยนสูตรหรือวงเงินอัตโนมัติ รายการเก่าที่ไม่มีค่าตอนเข้าไม่ถูกสร้างประวัติย้อนหลังขึ้นเอง
 - เมื่อถึงราคาเป้าหมายหรือจุดทบทวนความเสี่ยง การ์ดจะเสนอให้ตรวจการขายไม้ที่เกี่ยวข้อง การขายทั้งหมดหมายถึงทั้งหมดของไม้นั้น ไม่ใช่ทุกเหรียญในกระเป๋า
 - กดแจ้งเตือนเพื่อเปิดแอป แล้วกด **ตรวจราคาซื้อ → Phantom** หรือ **ตรวจราคาขาย → Phantom** ระบบจะตรวจสัญญาณ ราคา วงเงิน และธุรกรรมใหม่ ก่อนเปิดหน้าที่ให้มึงตรวจและเซ็นเอง หากสัญญาณหายหรือราคา/ต้นทุนไม่ผ่าน จะบอกเหตุผลและไม่เตรียมรายการ
 - คำแจ้งเตือนเดิมเว้นอย่างน้อย 15 นาที ปุ่ม **เตือนอีกทีใน 15 นาที** พักเฉพาะสัญญาณนั้น การถึงจุดความเสี่ยงยังบล็อกการซื้อเพิ่ม
@@ -63,7 +64,7 @@ Phantom holds the wallet and authorizes signatures. Jupiter finds swap routes an
 1. Connect the dedicated wallet, open **Live trading**, and refresh prices, FX and wallet. Synthetic prices cannot authorize real orders.
 2. Enter the original THB purchase cost, total USDC received from that purchase, and USDC allocated to the bot. The app assigns `original THB × allocated USDC / total USDC` as historical cost, rounded to satang. Confirm separately whether the original amount includes all fees. Personal amounts are never bundled into releases.
 3. Set the maximum active investment, maximum buy and unspent USDC reserve. The first release supports two open layers. Native SOL must separately cover tracked SOL positions, a 0.005 SOL fee buffer, the quoted network fee and any account rent. The buffer is not a per-transaction fee. Gasless and multisigner routes are intentionally unsupported.
-4. Configure the 20/80 allocation below, then start monitoring. Only eligible research can propose model buys. **เตรียมซื้อเมื่อผ่านโมเดล** requires a qualifying signal and rechecks the executable quote's estimated round-trip costs. **ซื้อเองด้วยเงินจริง (ข้ามโมเดล)** bypasses the model signal, model cooldown and forecast/cost threshold, retaining every hard limit.
+4. Configure the 20/80 allocation below, then choose **เริ่มเฝ้า RSI / MACD**. Indicators and quote-cost checks can authorize a proposal without a trained model. To use the separate forecast strategy, explicitly select **ใช้โมเดล Research แทน RSI/MACD**; it still requires passing research. **เตรียมซื้อตามโหมดที่เลือก** follows the selected strategy. **ซื้อเองด้วยเงินจริง (ข้ามสัญญาณ)** is an explicit manual override retaining hard limits.
 5. Review the prepared amounts, then open **ตรวจรายการและยืนยันใน Phantom**. Chrome is preferred, with the default browser as fallback. Compare the dedicated wallet, amount, minimum receipt and fees in Phantom. The approval link expires quickly; unlock Phantom before preparing a quote.
 6. The worker saves the verified signature before submission. A timeout leaves the order pending. Only finalized chain balances create a fill; clicking twice, restarting, or losing a response cannot authorize a second order. Use **ตรวจผลคำสั่งเดิมอีกครั้ง** after an ambiguous result. Do not manually repeat a pending trade elsewhere.
 7. Sell half or all of a layer's tradable portion through the same approval flow. Protected SOL cannot be sold. Profits stay parked until released, within the caps. Targets and review prices are decision thresholds, not guaranteed execution prices.

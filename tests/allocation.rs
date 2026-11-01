@@ -68,6 +68,107 @@ fn order(rate: &ThbRate, side: &str, input: u64, output: u64) -> PendingOrder {
 }
 
 #[test]
+fn quote_targets_match_actual_fill_anchoring_without_increasing_atr_distance() {
+    use crypto_bros::indicator_strategy::{check_quote, quote_review};
+    let (a, _, rate) = fixture();
+    let mut buy = order(&rate, "buy", 3_050_000, 30_000_000);
+    buy.minimum_output = 29_950_000;
+    buy.target_price = 100_800_000; // An unchanged 0.8-USDC ATR distance.
+    let before = serde_json::to_value(&buy).unwrap();
+    // The old reference-anchored test falsely rejects this executable quote.
+    let old_net =
+        buy.minimum_output as u128 * buy.target_price as u128 / SOL as u128 * 9970 / 10_000;
+    assert!(old_net < buy.input as u128);
+    let report = quote_review(&buy).unwrap();
+    assert!(report.passed);
+    assert!(check_quote(&buy).is_ok());
+    for (i, case) in [&report.expected, &report.minimum].iter().enumerate() {
+        let mut account = a.clone();
+        account.reserve_bps = 2000;
+        account
+            .apply_fill(
+                &buy,
+                &format!("fixture-buy-{i}"),
+                buy.input,
+                case.received_sol,
+                buy.network_fee,
+                0,
+                rate.fetched_at,
+            )
+            .unwrap();
+        let layer = &account.layers[0];
+        assert_eq!(case.target_price, layer.target_price);
+        assert_eq!(case.target_price - case.entry_price, 800_000);
+        assert_eq!(case.tradable_sol, layer.tradable_quantity());
+        assert_eq!(case.reserved_sol, layer.reserved_quantity);
+        let cost =
+            crypto_bros::live::ratio(layer.cost_usdc, case.tradable_sol, layer.quantity).unwrap();
+        let fee = crypto_bros::live::ratio(layer.entry_fee_usdc, case.tradable_sol, layer.quantity)
+            .unwrap();
+        let gross = crypto_bros::live::ratio(case.tradable_sol, layer.target_price, SOL).unwrap();
+        let proceeds = gross - case.exit_swap_cost_usdc;
+        assert_eq!(
+            case.net_usdc as i128,
+            proceeds as i128 - cost as i128 - fee as i128 - case.exit_network_cost_usdc as i128
+        );
+        assert!(watch::profit_exit_covers_costs(
+            layer,
+            case.tradable_sol,
+            proceeds,
+            buy.network_fee,
+            layer.target_price,
+            &rate
+        ));
+    }
+    assert_eq!(before, serde_json::to_value(&buy).unwrap());
+}
+
+#[test]
+fn quote_cannot_use_reserved_sol_to_make_a_small_trade_pass() {
+    use crypto_bros::indicator_strategy::quote_review;
+    let (_, _, rate) = fixture();
+    let mut buy = order(&rate, "buy", 3_050_000, 30_000_000);
+    buy.target_price = 100_800_000;
+    buy.network_fee = 40_000;
+    let report = quote_review(&buy).unwrap();
+    let target = report.minimum.target_price;
+    let gross = crypto_bros::live::ratio(buy.minimum_output, target, SOL).unwrap();
+    let full_net = gross * 9970 / 10000
+        - buy.input
+        - crypto_bros::live::ratio(buy.network_fee, buy.price, SOL).unwrap()
+        - crypto_bros::live::ratio(buy.network_fee, target, SOL).unwrap();
+    assert!(full_net > 6100); // Hypothetically selling the reserve would pass.
+    assert_eq!(report.minimum.cost_usdc, 2_440_000);
+    assert_eq!(report.minimum.required_net_usdc, 4880);
+    assert!(!report.passed);
+    assert!(report.ensure_passes().unwrap_err().contains("ยังไม่ได้ส่งคำสั่ง"));
+}
+
+#[test]
+fn expensive_network_and_narrow_targets_still_block_and_rent_is_separate() {
+    use crypto_bros::indicator_strategy::{check_quote, quote_review};
+    let (_, _, rate) = fixture();
+    let mut buy = order(&rate, "buy", 3_050_000, 30_000_000);
+    buy.target_price = 100_800_000;
+    let original = quote_review(&buy).unwrap();
+    buy.rent_delta = 2_039_280;
+    assert_eq!(
+        quote_review(&buy).unwrap().minimum.net_usdc,
+        original.minimum.net_usdc
+    );
+    buy.network_fee = 1_000_000;
+    assert!(check_quote(&buy).is_err());
+    buy.network_fee = 5000;
+    buy.target_price = 100_200_000;
+    assert!(check_quote(&buy).is_err());
+    buy.target_price = 100_800_000;
+    buy.minimum_output = 29_000_000;
+    assert!(check_quote(&buy).unwrap_err().contains("2%"));
+    buy.minimum_output = buy.expected_output + 1;
+    assert!(check_quote(&buy).is_err());
+}
+
+#[test]
 fn indicator_rewards_use_confirmed_net_results_and_one_case_per_tradable_layer() {
     use crypto_bros::indicator_strategy::{EntryContext, VERSION, memory};
     let (mut a, _, rate) = fixture();

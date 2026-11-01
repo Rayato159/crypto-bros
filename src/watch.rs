@@ -48,6 +48,8 @@ pub struct Watch {
     pub snoozed: BTreeMap<String, i64>,
     pub notified: BTreeMap<String, i64>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub last_buy_quote: Option<crate::indicator_strategy::BuyQuoteReview>,
 }
 
 pub fn buy_size(a: &RealAccount) -> u64 {
@@ -197,11 +199,20 @@ pub fn view(s: &Snapshot, now: i64) -> Value {
             },
             a.fills.len()
         );
+        let cost_blocked = s.watch.last_buy_quote.as_ref().is_some_and(|q| {
+            q.watch_key.as_deref() == Some(key.as_str())
+                && q.input_usdc == amount
+                && q.reference_price == price
+                && q.expires_at > now
+                && !q.passed
+        });
         signals.push(json!({"key":key,"side":"buy","risk":false,"layer_id":0,
-            "title":format!("มีสัญญาณซื้อ SOL ด้วย {:.2} USDC",amount as f64/USDC as f64),
+            "cost_blocked":cost_blocked,"quote_required":true,
+            "title":if cost_blocked {"สัญญาณผ่าน แต่ราคาที่ตรวจล่าสุดยังไม่คุ้มค่าใช้จ่าย".into()}
+                else {format!("สัญญาณผ่าน · รอตรวจราคาซื้อ {:.2} USDC",amount as f64/USDC as f64)},
             "reason":advice["reason"],
             "amount_usdc":amount,"value_satang":rate.satang(amount).unwrap_or(0),
-            "button":"ตรวจราคาซื้อ → Phantom","observed_at":s.updated_at,"expires_at":s.updated_at+120}));
+            "button":if cost_blocked {"ตรวจราคาใหม่"}else{"ตรวจราคาซื้อก่อนยืนยัน"},"observed_at":s.updated_at,"expires_at":s.updated_at+120}));
     }
     signals.retain(|v| {
         s.watch
@@ -259,6 +270,7 @@ pub fn claim(s: &mut Snapshot, now: i64) -> Option<Value> {
     let signal = v["signals"]
         .as_array()?
         .iter()
+        .filter(|v| v["cost_blocked"] != true)
         .find(|v| {
             s.watch
                 .notified

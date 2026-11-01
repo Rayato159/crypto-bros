@@ -139,23 +139,136 @@ pub fn memory(trades: &[RewardTrade], entry: Option<&EntryContext>) -> Value {
         "changes_rules":false})
 }
 
-pub fn check_quote(order: &crate::live::PendingOrder) -> Result<(), &'static str> {
-    if order.input == 0 || order.minimum_output == 0 || order.target_price <= order.price {
-        return Err("ราคาเป้าหมายหรือจำนวนคำสั่งไม่ถูกต้อง");
+/// Hypothetical disposal of the tradable 80%, at its unchanged ATR target.
+/// No reserved SOL is sold or counted as realized profit. These are estimates,
+/// not forecasts or executable exit quotes; rent remains a recoverable deposit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExitEstimate {
+    pub received_sol: u64,
+    pub reserved_sol: u64,
+    pub tradable_sol: u64,
+    pub entry_price: u64,
+    pub target_price: u64,
+    pub cost_usdc: u64,
+    pub entry_fee_usdc: u64,
+    pub exit_swap_cost_usdc: u64,
+    pub exit_network_cost_usdc: u64,
+    pub net_usdc: i64,
+    pub required_net_usdc: u64,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuyQuoteReview {
+    pub checked_at: i64,
+    pub expires_at: i64,
+    pub watch_key: Option<String>,
+    pub reference_price: u64,
+    pub input_usdc: u64,
+    pub network_fee_lamports: u64,
+    pub rent_delta_lamports: i64,
+    pub reserve_bps: u16,
+    pub exit_fee_bps: u16,
+    pub expected: ExitEstimate,
+    pub minimum: ExitEstimate,
+    pub passed: bool,
+}
+
+impl BuyQuoteReview {
+    pub fn ensure_passes(&self) -> Result<(), String> {
+        if self.passed {
+            return Ok(());
+        }
+        let limiting = if self.minimum.net_usdc <= self.expected.net_usdc {
+            &self.minimum
+        } else {
+            &self.expected
+        };
+        Err(format!(
+            "สัญญาณผ่าน แต่ราคาที่ตรวจยังไม่คุ้ม: ซื้อ {:.4} USDC แล้วขายเฉพาะส่วนเทรดที่เป้า คาดเหลือสุทธิ {:+.6} USDC ต้องมากกว่า {:.6} USDC (0.20% ของต้นทุนส่วนที่ขาย) ดูผลตรวจราคาใต้การ์ด ยังไม่ได้ส่งคำสั่ง",
+            self.input_usdc as f64 / 1e6,
+            limiting.net_usdc as f64 / 1e6,
+            limiting.required_net_usdc as f64 / 1e6,
+        ))
     }
-    let gross =
-        order.minimum_output as u128 * order.target_price as u128 / crate::live::SOL as u128;
-    // Entry cost is already represented by the route's minimum received SOL.
-    // Exit cost remains an estimate (30 bps + another network fee), not a quote.
-    let exit = gross * 9970 / 10_000;
-    let network = 2 * order.network_fee as u128 * order.price as u128 / crate::live::SOL as u128;
-    let required = (order.input as u128 * 10_020).div_ceil(10_000);
-    if exit.saturating_sub(network) <= required {
-        return Err(
-            "ราคาเป้าหมายยังไม่เหลือส่วนต่าง 0.20% หลังราคาซื้อจริงและค่าซื้อขายโดยประมาณ จึงยังไม่เตรียมซื้อ เป้านี้ไม่ใช่คำทำนายว่าจะไปถึง",
-        );
+}
+
+fn estimate_exit(order: &crate::live::PendingOrder, received: u64) -> Result<ExitEstimate, String> {
+    use crate::live::{SOL, ratio, reserved_part};
+    let reserved = reserved_part(received, 2000);
+    let tradable = received.saturating_sub(reserved);
+    if tradable == 0 {
+        return Err("ไม่มี SOL ส่วนเทรดหลังกันสำรอง".into());
     }
-    Ok(())
+    let (target, _) = order.entry_thresholds(received)?;
+    let gross = ratio(tradable, target, SOL)?;
+    let proceeds = ratio(gross, 9970, 10_000)?;
+    let cost = ratio(order.input, tradable, received)?;
+    let entry_fee = ratio(
+        ratio(order.network_fee, order.price, SOL)?,
+        tradable,
+        received,
+    )?;
+    // Match settlement's fee valuation at the prospective exit price. The future
+    // network fee is unknown: use the quoted entry fee's lamports as an estimate.
+    let exit_network = ratio(order.network_fee, target, SOL)?;
+    let net =
+        i64::try_from(proceeds as i128 - cost as i128 - entry_fee as i128 - exit_network as i128)
+            .map_err(|_| "Quote cost overflow")?;
+    let required = u64::try_from((cost as u128 * 20).div_ceil(10_000))
+        .map_err(|_| "Quote threshold overflow")?;
+    Ok(ExitEstimate {
+        received_sol: received,
+        reserved_sol: reserved,
+        tradable_sol: tradable,
+        entry_price: ratio(order.input, SOL, received)?,
+        target_price: target,
+        cost_usdc: cost,
+        entry_fee_usdc: entry_fee,
+        exit_swap_cost_usdc: gross - proceeds,
+        exit_network_cost_usdc: exit_network,
+        net_usdc: net,
+        required_net_usdc: required,
+        passed: net as i128 > required as i128,
+    })
+}
+
+pub fn quote_review(order: &crate::live::PendingOrder) -> Result<BuyQuoteReview, String> {
+    use crate::live::{SOL, ratio};
+    if order.side != "buy"
+        || order.input == 0
+        || order.minimum_output == 0
+        || order.minimum_output > order.expected_output
+        || order.target_price <= order.price
+        || order.price == 0
+    {
+        return Err("ราคาเป้าหมายหรือจำนวนคำสั่งไม่ถูกต้อง".into());
+    }
+    // Re-anchoring the target must never bypass the existing 2% route bound.
+    let fair = ratio(order.input, SOL, order.price)?;
+    if order.minimum_output as u128 * 100 < fair as u128 * 98 {
+        return Err("ราคาซื้อคลาดเคลื่อนเกินขอบเขต 2% กรุณาตรวจราคาใหม่".into());
+    }
+    let expected = estimate_exit(order, order.expected_output)?;
+    let minimum = estimate_exit(order, order.minimum_output)?;
+    Ok(BuyQuoteReview {
+        checked_at: order.prepared_at,
+        expires_at: order.expires_at,
+        watch_key: None,
+        reference_price: order.price,
+        input_usdc: order.input,
+        network_fee_lamports: order.network_fee,
+        rent_delta_lamports: order.rent_delta,
+        reserve_bps: 2000,
+        exit_fee_bps: 30,
+        passed: expected.passed && minimum.passed,
+        expected,
+        minimum,
+    })
+}
+
+pub fn check_quote(order: &crate::live::PendingOrder) -> Result<(), String> {
+    quote_review(order)?.ensure_passes()
 }
 
 pub fn view(s: &crate::state::Snapshot, now: i64) -> Value {

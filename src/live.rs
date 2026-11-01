@@ -161,6 +161,21 @@ pub struct PendingOrder {
     pub model: String,
     pub message: Option<String>,
 }
+impl PendingOrder {
+    /// The ATR distances are fixed when preparing; the actual fill anchors them.
+    /// Quote checks must use this same rule, never invent a higher target to pass.
+    pub fn entry_thresholds(&self, received_sol: u64) -> Result<(u64, u64), String> {
+        let execution_price = ratio(self.input, SOL, received_sol)?;
+        Ok((
+            execution_price
+                .checked_add(self.target_price.saturating_sub(self.price))
+                .ok_or("Entry target overflow")?,
+            execution_price
+                .saturating_sub(self.price.saturating_sub(self.review_price))
+                .max(1),
+        ))
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealAccount {
     #[serde(default)]
@@ -515,7 +530,7 @@ impl RealAccount {
             next.cash -= input;
             next.cash_basis_satang -= disposed_basis;
             let id = next.layers.last().map_or(1, |l| l.id + 1);
-            let execution_price = ratio(input, SOL, output)?;
+            let (target_price, review_price) = order.entry_thresholds(output)?;
             next.layers.push(RealLayer {
                 id,
                 quantity: output,
@@ -524,11 +539,8 @@ impl RealAccount {
                 cost_satang: acquisition,
                 entry_fee_usdc: fee_usdc,
                 entry_fee_satang: fee_satang,
-                target_price: execution_price
-                    .saturating_add(order.target_price.saturating_sub(order.price)),
-                review_price: execution_price
-                    .saturating_sub(order.price.saturating_sub(order.review_price))
-                    .max(1),
+                target_price,
+                review_price,
                 opened_at: time,
                 model: order.model.clone(),
             });

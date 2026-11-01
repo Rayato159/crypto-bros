@@ -245,6 +245,49 @@ async fn indicator_approval_requires_the_same_fresh_signal_and_mode() {
 }
 
 #[test]
+fn rejected_quote_is_visible_retryable_and_cannot_turn_into_a_buy_permission() {
+    use crypto_bros::{indicator_strategy, live::PendingOrder};
+    let mut s = indicator_fixture();
+    let now = s.updated_at;
+    let card = cards(&s)[0].clone();
+    let input = card["amount_usdc"].as_u64().unwrap();
+    let price = crypto_bros_core::ledger::price_units(s.price).unwrap();
+    let quantity = crypto_bros::live::ratio(input, SOL, price).unwrap();
+    let order: PendingOrder = serde_json::from_value(serde_json::json!({
+        "id":"unfunded","side":"buy","layer_id":0,"input":input,
+        "expected_output":quantity,"minimum_output":quantity,"unsigned_transaction":"not-to-persist",
+        "request_id":"not-to-persist","last_valid_block_height":0,"prepared_at":now,"expires_at":now+60,
+        "signature":null,"status":"awaiting_approval","network_fee":1_000_000,"rent_delta":0,
+        "rate":s.thb_rate,"price":price,"target_price":price+1,"review_price":price-1,
+        "model":indicator_strategy::VERSION,"message":null
+    })).unwrap();
+    let mut report = indicator_strategy::quote_review(&order).unwrap();
+    report.watch_key = Some(card["key"].as_str().unwrap().into());
+    assert!(!report.passed);
+    s.watch.last_buy_quote = Some(report);
+    assert_eq!(cards(&s)[0]["cost_blocked"], true);
+    assert!(watch::claim(&mut s, now).is_none());
+    assert!(watch::order_payload(&s, card["key"].as_str().unwrap(), now).is_ok());
+    assert!(s.real.as_ref().unwrap().pending.is_none());
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("quote-review.sqlite")).unwrap();
+    store.save(&s, "isolated-rejected-quote").unwrap();
+    let restored = store.load().unwrap();
+    let saved = serde_json::to_string(restored.watch.last_buy_quote.as_ref().unwrap()).unwrap();
+    assert!(!saved.contains("not-to-persist"));
+    assert!(!restored.live_enabled);
+    assert!(restored.real.as_ref().unwrap().pending.is_none());
+    // A diagnosis may persist; it never keeps a stale block/card active.
+    s.watch.last_buy_quote.as_mut().unwrap().expires_at = now;
+    assert_eq!(cards(&s)[0]["cost_blocked"], false);
+    s.watch.last_buy_quote.as_mut().unwrap().expires_at = now + 60;
+    s.watch.last_buy_quote.as_mut().unwrap().input_usdc += 1;
+    assert_eq!(cards(&s)[0]["cost_blocked"], false);
+    s.live_enabled = false;
+    assert!(watch::order_payload(&s, card["key"].as_str().unwrap(), now).is_err());
+}
+
+#[test]
 fn explicitly_selected_indicator_mode_can_propose_without_research_but_keeps_limits() {
     let mut s = indicator_fixture();
     crypto_bros::live_api::start_watch(&mut s).unwrap();

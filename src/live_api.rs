@@ -598,7 +598,14 @@ pub async fn dispatch(state: &AppState, action: &str, payload: &Value) -> Result
                     if entry_context.as_ref() != Some(&latest) || !latest.buy_ready() {
                         return Err("แท่งราคาเปลี่ยนระหว่างตรวจคำสั่ง ดูสัญญาณ RSI/MACD ล่าสุดก่อน".into());
                     }
-                    indicator_strategy::check_quote(&order)?;
+                    let mut review = indicator_strategy::quote_review(&order)?;
+                    review.watch_key = payload["watch_key"].as_str().map(str::to_owned);
+                    let cost_gate = review.ensure_passes();
+                    e.snapshot.watch.last_buy_quote = Some(review);
+                    // Retain only the numeric diagnosis, never the rejected unsigned
+                    // transaction, and surface it even when preparation returns Err.
+                    e.commit("indicator_buy_quote_reviewed")?;
+                    cost_gate?;
                 } else {
                     let existing_cost = 2.0
                         * (account.advice_policy.fee_bps + account.advice_policy.slippage_bps)

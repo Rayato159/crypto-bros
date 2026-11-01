@@ -1,5 +1,6 @@
 mod chart;
 mod live_details;
+mod quote_details;
 mod updates_ui;
 use dioxus::prelude::*;
 use serde_json::{Value, json};
@@ -185,7 +186,7 @@ fn app() -> Element {
         div {class:"shell",
             aside {class:"sidebar",div {class:"brand",div {class:"brand-mark","C↗"}div {class:"brand-name",div {"CRYPTO"}div {"BROS"}}}div {class:"workspace-label","PERSONAL TRADING LAB"}
                 nav {for (index,name) in ["Overview","Live trading","Layers","Research","Decisions","Wallet","Settings"].into_iter().enumerate(){button {class:if tab()==name{"nav-item active"}else{"nav-item"},onclick:move |_|tab.set(name.into()),span {class:"nav-number","0{index+1}"}span {"{name}"}if tab()==name{span {class:"nav-arrow","↗"}}}}}
-                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.6.0 · MANUAL APPROVAL"}}
+                div {class:"sidebar-bottom",div {class:"status-line",span {class:if running{"dot live"}else{"dot"}}if running{"PAPER ENGINE RUNNING"}else{"PAPER ENGINE PAUSED"}}p {"Your machine. Your data."}div {class:"version","v0.6.1 · MANUAL APPROVAL"}}
             }
             main {class:"main",header {class:"topbar",div {class:"breadcrumb","WORKSTATION",span {"/"},strong {"{tab()}"}}div {class:"topbar-right",span {class:"source-tag","{source_label}"}span {class:"paper-badge",if tab()=="Live trading"{"REAL MONEY · PHANTOM"}else if tab()=="Overview"||tab()=="Layers"{"PAPER TRADING"}else{"RESEARCH / ACCOUNT TOOLS"}}}}
                 div {class:"content",
@@ -369,14 +370,14 @@ fn TradeWatch() -> Element {
                     let key=s(&signal["key"]).to_owned();
                     let skip_key=key.clone();
                     let is_buy=signal["side"]=="buy";
-                    rsx!{article {class:if signal["risk"]==true{"signal-card risk"}else if signal["below_cost_basis"]==true{"signal-card cost"}else{"signal-card"},
+                    rsx!{article {class:if signal["risk"]==true{"signal-card risk"}else if signal["below_cost_basis"]==true||signal["cost_blocked"]==true{"signal-card cost"}else{"signal-card"},
                         h3 {"{s(&signal[\"title\"])}"}
                         p {class:"signal-reason","{s(&signal[\"reason\"])}"}
                         p {class:"signal-money",if is_buy {"ใช้ {money(n(&signal[\"amount_usdc\"])/1e6)} USDC · ประมาณ ฿{money(n(&signal[\"value_satang\"])/100.0)}"}
                             else {"เสนอขาย SOL ของไม้ #{n(&signal[\"layer_id\"]) as u64} จำนวน {n(&signal[\"quantity_sol\"])/1e9:.9} SOL (ไม่แตะส่วนสำรอง)"}}
                         if !is_buy {p {"ผลกำไร/ขาดทุน ณ ราคาอ้างอิง: {money(n(&signal[\"pnl_usdc\"])/1e6)} USDC / ฿{money(n(&signal[\"pnl_satang\"])/100.0)}"}}
                         if signal["below_cost_basis"]==true {p {class:"cost-warning","ถึงเป้าราคาไม่ได้แปลว่ากำไรทั้งสองสกุล ตอนนี้ยังไม่คุ้มต้นทุน USDC หรือบาท ต้องตรวจราคาจริงและค่าขายก่อน หากกำไรไม่ครบทั้งสองสกุล ระบบจะยังไม่เตรียมขายทำกำไร"}}
-                        p {class:"signal-estimate","ตัวเลขยังเป็นประมาณการก่อนค่าใช้จ่ายขาออก กดแล้วจะตรวจราคาจริงใหม่ หากสัญญาณเปลี่ยนจะไม่เตรียมคำสั่ง"}
+                        p {class:"signal-estimate",if is_buy {"RSI/MACD ผ่านยังไม่แปลว่าราคาซื้อผ่าน กดเพื่อตรวจค่าใช้จ่ายก่อน หากผ่านจึงเปิด Phantom ถ้าไม่ผ่านจะแสดงตัวเลขด้านล่างและไม่ส่งคำสั่ง"}else{"ตัวเลขยังเป็นประมาณการก่อนค่าใช้จ่ายขาออก กดแล้วจะตรวจราคาจริงใหม่ หากสัญญาณเปลี่ยนจะไม่เตรียมคำสั่ง"}}
                         div {class:"actions",
                             button {class:"button primary",disabled:(ctx.busy)()||!connected,onclick:move |_|{
                                 let key=key.clone();
@@ -396,6 +397,7 @@ fn TradeWatch() -> Element {
             }}
             p {class:"muted small","การกดแจ้งเตือนเปิดแอปเท่านั้น ทุกการซื้อและขายต้องเซ็นใน Phantom • คอมต้องเปิดและไม่หลับ • Windows อาจซ่อนแจ้งเตือนเมื่อเปิดห้ามรบกวน"}
         }
+        quote_details::BuyQuoteDetails {}
         IndicatorRuleDetails {}
     }
 }
@@ -552,7 +554,7 @@ fn Settings() -> Element {
     let ctx = use_context::<Context>();
     let data = (ctx.state)();
     rsx! {
-        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.6.0 · manually approved trading"}}}
+        div {class:"page-heading",div {div {class:"eyebrow","WORKSTATION SETTINGS"}h1 {"Built to stay local."}p {"Crypto Bros 0.6.1 · manually approved trading"}}}
         div {class:"bottom-grid",
             updates_ui::Updates{}
             section {class:"panel",h2 {"Connections"}div {class:"watch-row",span {"Jupiter API key"}strong {if data["jupiter_key_configured"]==true{"CONFIGURED"}else{"KEYLESS QUOTES"}}}div {class:"watch-row",span {"Email notifications"}strong {if data["email_configured"]==true{"CONFIGURED"}else{"NOT CONFIGURED"}}}

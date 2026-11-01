@@ -1,11 +1,11 @@
 {
-  "version": "0.6.0",
-  "notes": "Start RSI/MACD monitoring without a research wait. Review each proposal in Phantom. Remember net realized rewards by entry context; partial exits count once. Research mode retains its evidence gate. Reward memory does not automatically alter rules or limits.",
-  "pub_date": "2026-10-31T10:39:58.428Z",
+  "version": "0.6.1",
+  "notes": "Fix RSI/MACD quote assessment to use the same execution-price-plus-fixed-ATR target as settlement. Estimate only the tradable 80%, retain cost guards, and display persistent fee/headroom details with a fresh-quote retry. Every trade still requires Phantom approval.",
+  "pub_date": "2026-11-01T15:48:35.521Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUzk3UTVoajl2UFk4V3ZSVjVMeENoZ0VibXhwZGxyejBRZUF5elB5S3ZQM3VkNk5oQ21uMVd4NlQ0c3RTcHlORWdIN2NTdWRlTVY4b1B0eGU0bXJMZHZGa1o2M0doZVFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNDQyOTk3CWZpbGU6Q3J5cHRvIEJyb3NfMC42LjBfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuNi4wCmNEdTlzZE1LdXNrczJlc0xWWGFlTUxONzI5UVBGTGlJZ24vUG9xdm93MVFTYmFGRDhhSkRVNy9kaXMwUWhJdmh1QkZiNDVRaDlYMmdhdTRZVG5WR0R3PT0K",
-      "url": "https://github.com/Rayato159/crypto-bros/releases/download/v0.6.0/Crypto.Bros_0.6.0_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSUzk3UTVoajl2UFltSGc3RklHUE92TGRIRmRJRFl1YVRYeEtUS05IMFZWM3VUUm5xSmhkOXBUZEU4UEdPejdxdmJjaHI1NUh5aWd5OTVRVkFJNld5ZnY4cmtEYXZYR0E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNTQ4MDI4CWZpbGU6Q3J5cHRvIEJyb3NfMC42LjFfeDY0X2VuLVVTLm1zaQl2ZXJzaW9uOjAuNi4xCnI0T1JMaWJMSENzWFR4dHUvNGJiL3F4eDlqWFVsUWNFUVY4Ry81UFp3WWJqTWJ1NmVCUHNjVkVtSmsrMEVPR3BBRkExQ3VIUE9SclorZVNSdzVSZUJ3PT0K",
+      "url": "https://github.com/Rayato159/crypto-bros/releases/download/v0.6.1/Crypto.Bros_0.6.1_x64_en-US.msi"
     }
   }
 }
